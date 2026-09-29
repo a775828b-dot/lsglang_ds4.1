@@ -1,11 +1,12 @@
 # lsglang_ds4.1
 
 DeepSeek V4.1 Flash NVFP4 单卡推理管线：一张 RTX PRO 5000 72GB + 双路 EPYC，512K 上下文，DSpark 投机解码。
-框架是 [guqiong96/Lsglang](https://github.com/guqiong96/Lsglang)（sglang 的 CPU/GPU 混合推理分支），CPU 层的路由专家由自研的
-**lkqmoe** 计算（本仓库附编译好的闭源版本）。
+框架是 [guqiong96/Lsglang](https://github.com/guqiong96/Lsglang)（sglang 的 CPU/GPU 混合推理分支），CPU 层的路由专家由受
+[lk_moe](https://github.com/guqiong96/Lsglang)（lsglang 作者 guqiong96 的 CPU MoE 后端）启发、并针对 NVFP4 格式专项加速的
+**lkqmoe** 承担计算（本仓库附编译好的闭源版本）。
 
 *English: a single-GPU DeepSeek V4.1 Flash NVFP4 pipeline (RTX PRO 5000 72GB + 2x EPYC 9334, 512K context, DSpark speculative
-decoding) on guqiong96/Lsglang, with the CPU-side routed experts on lkqmoe, a closed-source compiled MoE kernel included here.
+decoding) on guqiong96/Lsglang, with the CPU-side routed experts on lkqmoe, an NVFP4-specialised MoE kernel inspired by lk_moe (by guqiong96, the author of lsglang); a compiled, closed-source build is included here.
 Speeds at 8 context lengths from 4K to 500K are below.*
 
 ## 组成
@@ -17,7 +18,7 @@ Speeds at 8 context lengths from 4K to 500K are below.*
 | 推理框架 | guqiong96/Lsglang @ [`6068667`](https://github.com/guqiong96/Lsglang/commit/6068667581bebd2184f7e4acb46136f44837889a) | `patches/lsglang-6068667.patch`（7 个文件） |
 | DSpark 运行时 | 在 Lsglang 基础上调试的稳定版模块（调度、验证、SPS 表等） | `overlay/runtime-dspark-stable-20260920-v2/` |
 | Engram 行存储 | Engram 表放 NVMe，行缓存放内存 | `adapter/`（源码 + 编译好的 .so） |
-| CPU 专家内核 | **lkqmoe**（闭源，编译版）。思路与上游参考：Lsglang 的 `lk_moe`，是其 `MOE_NVFP4` 接口的独立实现 | `lkqmoe/` |
+| CPU 专家内核 | **lkqmoe**（闭源，编译版）：受 lk_moe 启发、针对 NVFP4 格式专项加速的 CPU/GPU 混合 MoE 内核。lk_moe 来自 lsglang 作者 guqiong96（[guqiong96/Lsglang](https://github.com/guqiong96/Lsglang)）；lkqmoe 独立实现其 `MOE_NVFP4` 接口，不含 lk_moe 代码 | `lkqmoe/` |
 | 启动 | 本文测速所用的完整参数 | `launch/run-ds41-nvfp4.sh` |
 
 ## 本机硬件
