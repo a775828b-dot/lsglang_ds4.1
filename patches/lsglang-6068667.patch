@@ -1,0 +1,247 @@
+diff --git a/python/sglang/kernels/ops/quantization/fp8_kernel.py b/python/sglang/kernels/ops/quantization/fp8_kernel.py
+index 289e597..3c3728e 100644
+--- a/python/sglang/kernels/ops/quantization/fp8_kernel.py
++++ b/python/sglang/kernels/ops/quantization/fp8_kernel.py
+@@ -1933,6 +1933,10 @@ def w8a8_block_fp8_matmul_triton(
+             "num_warps": 4,
+             "num_stages": 3,
+         }
++        # SM120 single-token decode: avoid replicating one row across 64 rows.
++        # Keep tuned configs and other batch sizes on their existing paths.
++        if M == 1 and block_n == block_k == 32 and get_platform().is_sm120:
++            config["BLOCK_SIZE_M"] = 16
+ 
+     if _is_gfx1250 or not fp8_dot_supported():
+         # No fp8 tl.dot on this arch (gfx1250, or CUDA before Ada): upcast the
+diff --git a/python/sglang/srt/layers/attention/deepseek_v4_backend.py b/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+index 2c869db..b1de54e 100644
+--- a/python/sglang/srt/layers/attention/deepseek_v4_backend.py
++++ b/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+@@ -338,7 +338,7 @@ def two_level_decode_logits(
+ 
+ 
+ # Arbitrary cap on one bf16 [rows, heads, lc] score chunk; transients run ~3x this.
+-_TORCH_INDEXER_SCORE_BUDGET_BYTES = 1 << 30
++_TORCH_INDEXER_SCORE_BUDGET_BYTES = 128 << 20
+ 
+ 
+ def _mask_topk_scores(
+diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
+index 6d59cf4..1041e3a 100644
+--- a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
++++ b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
+@@ -1962,6 +1962,9 @@ class FusedMoE(torch.nn.Module):
+             logger.error(f"Failed to initialize lk_moe: {e}") 
+             self.lk_moe = None
+             self.lk_moe_config = None 
++            raise RuntimeError(
++                f"lk_moe initialization failed for layer {self.layer_id}; stopping load"
++            ) from e
+     def clean_weights_after_loading(self): 
+         if self.is_gpu_resident_layer:
+             return
+diff --git a/python/sglang/srt/layers/quantization/fp8.py b/python/sglang/srt/layers/quantization/fp8.py
+index 117d9f3..0476eda 100644
+--- a/python/sglang/srt/layers/quantization/fp8.py
++++ b/python/sglang/srt/layers/quantization/fp8.py
+@@ -351,7 +351,7 @@ class Fp8Config(QuantizationConfig):
+                     weight_block_size,
+                 )
+             weight_block_size = [1, 32]
+-        return cls(
++        result = cls(
+             is_checkpoint_fp8_serialized=is_checkpoint_fp8_serialized,
+             activation_scheme=activation_scheme,
+             ignored_layers=ignored_layers,
+@@ -362,6 +362,9 @@ class Fp8Config(QuantizationConfig):
+             scale_fmt=scale_fmt,
+         )
+ 
++        result.dsv41_nvfp4_experts = config.get("moe_quant_algo", "").upper() == "NVFP4"
++        return result
++
+     def get_quant_method(
+         self, layer: torch.nn.Module, prefix: str
+     ) -> Optional[QuantizeMethodBase]:
+@@ -396,6 +399,14 @@ class Fp8Config(QuantizationConfig):
+ 
+                 return NPUMXFP8OnlineMoEMethod(self)
+ 
++            if getattr(self, "dsv41_nvfp4_experts", False):
++                from sglang.srt.layers.quantization.modelopt_quant import (
++                    ModelOptFp4Config, ModelOptNvFp4FusedMoEMethod,
++                )
++                return ModelOptNvFp4FusedMoEMethod(ModelOptFp4Config(
++                    is_checkpoint_nvfp4_serialized=True, group_size=16,
++                    use_per_token_activation=False,
++                ))
+             fp8_method = Fp8MoEMethod(self)
+ 
+             if self.is_fp4_experts and self.dequant_fp4_to_fp8:
+@@ -418,7 +429,7 @@ class Fp8Config(QuantizationConfig):
+ 
+                 return Mxfp4HummingMoEMethod(fp8_method, prefix=prefix)
+ 
+-            if self.is_fp4_experts and get_moe_runner_backend().is_flashinfer_mxfp4():
++            if self.is_fp4_experts and (get_moe_runner_backend().is_flashinfer_mxfp4() or get_moe_runner_backend().is_flashinfer_cutlass()):
+                 from sglang.srt.utils.common import is_sm80_supported
+ 
+                 # SM80/86/89 have no FlashInfer FP4 kernels at all (the FP4
+@@ -1078,6 +1089,7 @@ class Fp8LinearMethod(LinearMethodBase):
+             self.block_fp8_as_mxfp8
+             and getattr(layer, "block_fp8_mxfp8_ready", False)
+             and not isinstance(x, tuple)
++            and x.numel() == x.shape[-1]
+         ):
+             backend = self.mxfp8_dense_backend
+             extra_kwargs = {}
+@@ -1169,6 +1181,14 @@ class Fp8LinearMethod(LinearMethodBase):
+         )
+ 
+ 
++def _allocate_fp4_moe_weight(*shape, dtype, device):
++    import os
++    if device == "cpu" and os.environ.get("SGLANG_LK_MOE_NVME_STAGING") == "1":
++        from sglang.srt.utils.lk_moe_nvme_alloc import nvme_backed_empty
++        return nvme_backed_empty(*shape, dtype=dtype)
++    return torch.empty(*shape, dtype=dtype, device=device)
++
++
+ class Fp8MoEMethod(FusedMoEMethodBase):
+     """MoE method for FP8.
+     Supports loading FP8 checkpoints with static weight scale and
+@@ -1298,7 +1318,7 @@ class Fp8MoEMethod(FusedMoEMethodBase):
+         # WEIGHTS
+         if is_fp4_expert:
+             w13_weight = torch.nn.Parameter(
+-                torch.empty(
++                _allocate_fp4_moe_weight(
+                     num_experts,
+                     w13_num_shards * intermediate_size_per_partition,
+                     hidden_size // 2,
+@@ -1308,7 +1328,7 @@ class Fp8MoEMethod(FusedMoEMethodBase):
+                 requires_grad=False,
+             )
+             w2_weight = torch.nn.Parameter(
+-                torch.empty(
++                _allocate_fp4_moe_weight(
+                     num_experts,
+                     hidden_size,
+                     intermediate_size_per_partition // 2,
+diff --git a/python/sglang/srt/layers/quantization/fp8_utils.py b/python/sglang/srt/layers/quantization/fp8_utils.py
+index df30113..0301b2d 100644
+--- a/python/sglang/srt/layers/quantization/fp8_utils.py
++++ b/python/sglang/srt/layers/quantization/fp8_utils.py
+@@ -1541,6 +1541,8 @@ def flashinfer_mxfp8_blockscaled_linear(
+     pin_tactic skips autotuning and uses the backend heuristic to preserve row-wise
+     batch invariance; tactics tuned per M bucket can change the fp32 reduction order.
+     """
++    if get_platform().is_sm120 and backend == "cutlass" and input.numel() == input.shape[-1]:
++        backend = "b12x"
+     input_2d = input.view(-1, input.shape[-1])
+     output_shape = [*input.shape[:-1], weight.shape[0]]
+ 
+diff --git a/python/sglang/srt/utils/lk_moe_nvme_alloc.py b/python/sglang/srt/utils/lk_moe_nvme_alloc.py
+new file mode 100644
+index 0000000..c129055
+--- /dev/null
++++ b/python/sglang/srt/utils/lk_moe_nvme_alloc.py
+@@ -0,0 +1,29 @@
++"""Reclaimable FP4 load staging; LK owns the final CPU-resident weights.
++
++The scratch mapping stores unchanged packed bytes. It is not a quantizer or
++an inference-time expert cache. Deleted scratch files live until mappings close.
++"""
++import math
++import os
++from pathlib import Path
++import tempfile
++import numpy as np
++import torch
++
++def nvme_backed_empty(*shape, dtype):
++    root=Path(os.environ['SGLANG_LK_MOE_NVME_SCRATCH'])
++    root.mkdir(parents=True,exist_ok=True)
++    count=math.prod(shape)
++    if not count:
++        return torch.empty(*shape,dtype=dtype,device='cpu')
++    size=count*torch.empty((),dtype=dtype).element_size()
++    fd,path=tempfile.mkstemp(prefix='fp4-load-',suffix='.bin',dir=root)
++    try:
++        os.ftruncate(fd,size)
++        mapping=np.memmap(path,dtype=np.uint8,mode='r+',shape=(size,))
++    finally:
++        os.close(fd)
++        os.unlink(path)
++    tensor=torch.frombuffer(mapping,dtype=dtype).reshape(shape)
++    tensor._lk_moe_backing=mapping
++    return tensor
+diff --git a/python/sglang/srt/utils/lk_source_lock.py b/python/sglang/srt/utils/lk_source_lock.py
+new file mode 100644
+index 0000000..2553864
+--- /dev/null
++++ b/python/sglang/srt/utils/lk_source_lock.py
+@@ -0,0 +1,63 @@
++"""Keep one CPU layer's source pages resident only during LK construction."""
++from contextlib import contextmanager
++import ctypes
++import json
++from pathlib import Path
++import numpy as np
++
++libc = ctypes.CDLL(None, use_errno=True)
++libnuma = ctypes.CDLL('libnuma.so.1', use_errno=True)
++
++def check(rc):
++    if rc:
++        raise OSError(ctypes.get_errno(), 'LK source page operation failed')
++
++def snapshot(stage, layer, ranges):
++    node_free = {}
++    for p in Path('/sys/devices/system/node').glob('node[0-9]*/meminfo'):
++        node_free[p.parent.name] = next(int(s.split()[3]) for s in p.read_text().splitlines() if 'MemFree:' in s)
++    maps = []
++    starts = {start for start, size in ranges}
++    # Record the VMA containing each source start, even if mappings coalesce.
++    vma_starts = set()
++    for line in Path('/proc/self/maps').read_text().splitlines():
++        lo, hi = (int(s, 16) for s in line.split()[0].split('-'))
++        if any(lo <= start < hi for start in starts):
++            vma_starts.add(lo)
++    for line in Path('/proc/self/numa_maps').read_text().splitlines():
++        if int(line.split()[0], 16) in vma_starts:
++            maps.append(line)
++    locked = next(s for s in Path('/proc/self/status').read_text().splitlines() if s.startswith('VmLck:'))
++    print('LK_SOURCE_LOCK ' + json.dumps(dict(stage=stage, layer=layer, locked=locked, node_free_kib=node_free, maps=maps)), flush=True)
++
++@contextmanager
++def lock_sources(tensors, layer):
++    mode = ctypes.c_int(); mask = (ctypes.c_ulong * 16)()
++    check(libnuma.get_mempolicy(ctypes.byref(mode), mask, 1024, None, 0))
++    if mode.value != 3 or mask[0] != 255:
++        raise RuntimeError('Expected caller NUMA interleave across nodes 0-7')
++    ranges = []
++    for tensor in tensors:
++        if tensor.device.type != 'cpu' or not tensor.is_contiguous():
++            raise ValueError('Source locking requires contiguous CPU weights')
++        ranges.append((tensor.data_ptr(), tensor.numel() * tensor.element_size()))
++    held = []
++    try:
++        for addr, size in ranges:
++            if not size:
++                continue
++            raw = np.ctypeslib.as_array((ctypes.c_ubyte * size).from_address(addr))
++            int(raw[::4096].sum())
++            check(libc.mlock(ctypes.c_void_p(addr), ctypes.c_size_t(size)))
++            held.append((addr, size))
++        snapshot('locked', layer, ranges)
++        yield
++    finally:
++        errors = []
++        for addr, size in reversed(held):
++            rc = libc.munlock(ctypes.c_void_p(addr), ctypes.c_size_t(size))
++            if rc:
++                errors.append(ctypes.get_errno())
++        snapshot('unlocked', layer, ranges)
++        if errors:
++            raise OSError(errors[0], 'Failed to unlock LK source pages')

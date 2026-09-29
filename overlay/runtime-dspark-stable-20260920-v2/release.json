@@ -1,0 +1,10 @@
+{
+  "release": "runtime-dspark-stable-20260920-v2",
+  "mode": "n5_full6_cap_accept",
+  "main_gpu_layers": 0,
+  "threads": 64,
+  "batch_tokens": 24576,
+  "context_tokens": 524288,
+  "engram_gib": 16,
+  "note": "DSpark stable runtime modules (n=5, 6 verify tokens), loaded by sitecustomize.py in this directory"
+}

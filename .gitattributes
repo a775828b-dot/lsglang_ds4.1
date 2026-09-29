@@ -1,0 +1,6 @@
+*.so binary
+*.pyc binary
+*.pt binary
+*.sh text eol=lf
+*.py text eol=lf
+*.patch -text

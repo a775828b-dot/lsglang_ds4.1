@@ -1,0 +1,20 @@
+lkqmoe binary distribution
+Copyright (c) 2026 a775828b-dot. All rights reserved.
+
+This directory contains a compiled build of lkqmoe (liblkqmoe.so, liblkqmoe_cuda.so and the
+compiled Python adapter lkqmoe/*.pyc). The lkqmoe source code is not published.
+
+Permission is granted, free of charge, to use and to redistribute these files unmodified,
+together with or separately from this repository, for any purpose. Reverse engineering,
+decompilation and redistribution of modified copies are not permitted.
+
+The open files in this directory (python/sitecustomize.py, python/lkqmoe/gpu/*.py,
+python/lkqmoe/gpu/fp8_configs/*.json, tools/*.py) are licensed under the Apache License 2.0,
+like the rest of this repository.
+
+Idea and upstream reference: lk_moe (guqiong96/Lsglang), the CPU-offloaded MoE backend of
+lsglang. lkqmoe is an independent implementation of its MOE_NVFP4 interface and contains no
+lk_moe code.
+
+THE BINARY FILES ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO
+EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM THEIR USE.

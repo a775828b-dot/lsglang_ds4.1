@@ -1,0 +1,44 @@
+[
+ {
+  "target": 8200,
+  "input": 8026,
+  "ttft_s": 6.7,
+  "prefill_tok_s": 1198,
+  "prefill_vs_official": "-8%",
+  "decode_tok_s": 60.6,
+  "decode_vs_official": "+35%",
+  "accept": 3.7,
+  "verify_step_ms": 61.0,
+  "recall": true,
+  "vram_peak_mib": 60290,
+  "alive": true
+ },
+ {
+  "target": 78700,
+  "input": 79240,
+  "ttft_s": 27.1,
+  "prefill_tok_s": 2924,
+  "prefill_vs_official": "+18%",
+  "decode_tok_s": 50.8,
+  "decode_vs_official": "+18%",
+  "accept": 3.35,
+  "verify_step_ms": 66.0,
+  "recall": true,
+  "vram_peak_mib": 70316,
+  "alive": true
+ },
+ {
+  "target": 219700,
+  "input": 223274,
+  "ttft_s": 79.8,
+  "prefill_tok_s": 2798,
+  "prefill_vs_official": "+22%",
+  "decode_tok_s": 46.9,
+  "decode_vs_official": "+12%",
+  "accept": 3.2,
+  "verify_step_ms": 68.3,
+  "recall": true,
+  "vram_peak_mib": 70820,
+  "alive": true
+ }
+]
