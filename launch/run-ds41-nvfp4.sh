@@ -20,7 +20,8 @@ MAIN_LAYERS=${MAIN_LAYERS:-4}          # GPU-resident MoE layers of the target m
 RESIDENT_START=${RESIDENT_START:-20}
 ENGRAM_CACHE_GIB=${ENGRAM_CACHE_GIB:-12}
 BATCH_TOKENS=${BATCH_TOKENS:-32768}    # chunked prefill size
-KV_TOKENS=${KV_TOKENS:-524288}
+KV_TOKENS=${KV_TOKENS:-786432}         # measured limit with FP8 wo_a (774K/783K inputs pass; 905K runs out of VRAM
+                                       # at ~754K with a 1M pool); the 8-point table was measured with 524288
 GPU_MEMORY=${GPU_MEMORY:-0.95}
 LKQ_THREADS=${LKQ_THREADS:-112}        # 64 = physical cores, 112 = + 12 SMT siblings per NUMA node
 
@@ -76,6 +77,7 @@ export LKQMOE_DOWN_BF16=1           # BF16 Down dot products on CPU (finer than 
 export LKQMOE_DYNAMIC=2             # guided dynamic row scheduling (bitwise identical to the static split)
 export LKQMOE_FP8_CONFIGS=1         # tuned SM120 configs for the Triton block-FP8 GEMM
 export LKQMOE_DS41_WO_A_TRITON=1    # decode wo_a on the Triton grouped einsum
+export LKQMOE_DS41_WO_A_FP8=1       # keep wo_a in the checkpoint's FP8 (exact, 1.25 GiB less VRAM); 0 = BF16
 if [[ "$LKQ_THREADS" == 112 ]]; then
   export LKQMOE_THREADS=112 LKQMOE_PROBE_DISPATCH_CPU=95 LKQMOE_MAIN_CPUS=76-79,92-94,108-111,124-127
 else

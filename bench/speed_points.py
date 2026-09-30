@@ -19,6 +19,9 @@ P.add_argument('--tokenizer', required=True, help='model directory with the toke
 P.add_argument('--points', required=True, help='comma-separated input lengths in tokens')
 P.add_argument('--output', type=int, default=1024)
 P.add_argument('--out')
+P.add_argument('--seed', type=int, default=0, help='added to the document seed of every point (fresh text, no prefix-cache reuse)')
+P.add_argument('--exact', action='store_true', help='rescale the document until its token count is within 0.05%% of the point')
+P.add_argument('--stop-on-fail', action='store_true', help='stop at the first point that errors or does not recall the fact')
 A = P.parse_args()
 tok = AutoTokenizer.from_pretrained(A.tokenizer, trust_remote_code=True)
 BASE = f'http://127.0.0.1:{A.port}'
@@ -27,20 +30,29 @@ TOPICS = ['memory allocator', 'scheduler', 'network stack', 'file system', 'comp
 
 
 def document(tokens, seed):
-    rng = random.Random(seed)
-    def paragraph(i):
-        t = rng.choice(TOPICS)
-        return (f'Log entry {i}: the {t} team reviewed ticket {rng.randint(1000, 99999)}. They measured '
-                f'{rng.randint(1, 999)} ms latency, changed {rng.randint(1, 60)} files and noted that the '
-                f'{rng.choice(TOPICS)} depends on the {rng.choice(TOPICS)}. Follow-up owner: engineer {rng.randint(1, 500)}.\n')
-    code = f'{rng.randint(1000, 9999)}-{rng.choice(["ALPHA", "BRAVO", "DELTA", "OSCAR"])}'
-    per = len(tok.encode(paragraph(0), add_special_tokens=False))
-    n = max(1, int((tokens - 200) / per))
-    parts = [paragraph(i) for i in range(n)]
-    parts.insert(n // 10, f'IMPORTANT: the release code for project Lanternfish is {code}. Keep it for the final answer.\n')
-    question = ('\nTask: this was a long agent session log. First state the release code for project '
-                'Lanternfish exactly, then write a detailed compaction summary of the session.')
-    return ''.join(parts) + question, code
+    def build(n=None):
+        rng = random.Random(seed)
+        def paragraph(i):
+            t = rng.choice(TOPICS)
+            return (f'Log entry {i}: the {t} team reviewed ticket {rng.randint(1000, 99999)}. They measured '
+                    f'{rng.randint(1, 999)} ms latency, changed {rng.randint(1, 60)} files and noted that the '
+                    f'{rng.choice(TOPICS)} depends on the {rng.choice(TOPICS)}. Follow-up owner: engineer {rng.randint(1, 500)}.\n')
+        code = f'{rng.randint(1000, 9999)}-{rng.choice(["ALPHA", "BRAVO", "DELTA", "OSCAR"])}'
+        per = len(tok.encode(paragraph(0), add_special_tokens=False))
+        n = n or max(1, int((tokens - 200) / per))
+        parts = [paragraph(i) for i in range(n)]
+        parts.insert(n // 10, f'IMPORTANT: the release code for project Lanternfish is {code}. Keep it for the final answer.\n')
+        question = ('\nTask: this was a long agent session log. First state the release code for project '
+                    'Lanternfish exactly, then write a detailed compaction summary of the session.')
+        return ''.join(parts) + question, code, n
+    text, code, n = build()
+    for _ in range(4 if A.exact else 0):
+        # the one-paragraph estimate is off by a few percent; rescale the paragraph count to the measured length
+        have = len(tok.encode(text, add_special_tokens=False))
+        if abs(have - tokens) <= max(64, tokens // 2000):
+            break
+        text, code, n = build(max(1, round(n * tokens / have)))
+    return text, code
 
 
 def vram():
@@ -57,7 +69,7 @@ def accept_length():
 
 
 def run(tokens):
-    text, code = document(tokens, seed=tokens)
+    text, code = document(tokens, seed=tokens + A.seed)
     body = dict(model=A.model, messages=[{'role': 'user', 'content': text}], stream=True, max_tokens=A.output,
                 temperature=0, ignore_eos=True, stream_options={'include_usage': True})
     peak, stop = [vram()], threading.Event()
@@ -96,5 +108,7 @@ rows = []
 for n in [int(x) for x in A.points.split(',')]:
     rows.append(run(n))
     print(json.dumps(rows[-1], ensure_ascii=False), flush=True)
+    if A.stop_on_fail and (rows[-1]['error'] or not rows[-1]['recall']):
+        break
 if A.out:
     json.dump(rows, open(A.out, 'w'), indent=1)

@@ -1,0 +1,50 @@
+[
+ {
+  "target": 512000,
+  "prompt_tokens": 511961,
+  "completion_tokens": 2048,
+  "ttft_s": 262.75,
+  "prefill_tok_s": 1948,
+  "decode_tok_s": 68.0,
+  "accept_length": 3.77,
+  "recall": true,
+  "vram_peak_mib": 72784,
+  "error": null
+ },
+ {
+  "target": 643072,
+  "prompt_tokens": 643054,
+  "completion_tokens": 2048,
+  "ttft_s": 374.03,
+  "prefill_tok_s": 1719,
+  "decode_tok_s": 59.4,
+  "accept_length": 3.74,
+  "recall": true,
+  "vram_peak_mib": 72824,
+  "error": null
+ },
+ {
+  "target": 774144,
+  "prompt_tokens": 774103,
+  "completion_tokens": 2048,
+  "ttft_s": 509.75,
+  "prefill_tok_s": 1519,
+  "decode_tok_s": 60.7,
+  "accept_length": 3.74,
+  "recall": true,
+  "vram_peak_mib": 72828,
+  "error": null
+ },
+ {
+  "target": 905216,
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "ttft_s": null,
+  "prefill_tok_s": null,
+  "decode_tok_s": null,
+  "accept_length": null,
+  "recall": false,
+  "vram_peak_mib": 72824,
+  "error": "RemoteDisconnected('Remote end closed connection without response')"
+ }
+]

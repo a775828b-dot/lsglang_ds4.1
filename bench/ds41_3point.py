@@ -28,7 +28,8 @@ for n, (base_prefill, base_decode) in BASE.items():
                      prefill_vs_official=f'{100 * (prefill / base_prefill - 1):+.0f}%', decode_tok_s=d['decode_tok_s'],
                      decode_vs_official=f'{100 * (d["decode_tok_s"] / base_decode - 1):+.0f}%',
                      accept=d.get('accept_length'), verify_step_ms=d.get('verify_step_ms'),
-                     recall=d['needle_found'], vram_peak_mib=d['vram_peak_mib'], alive=d['server_alive']))
+                     recall=d['needle_found'], vram_peak_mib=d['vram_peak_mib'], alive=d['server_alive'],
+                     **({} if d['needle_found'] else dict(answer_head=d.get('answer_head')))))
     print(json.dumps(rows[-1]), flush=True)
     if not d['server_alive']:
         break
