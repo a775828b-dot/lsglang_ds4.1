@@ -1,0 +1,62 @@
+[
+ {
+  "target": 512000,
+  "prompt_tokens": 512016,
+  "completion_tokens": 2048,
+  "ttft_s": 262.86,
+  "prefill_tok_s": 1948,
+  "decode_tok_s": 61.3,
+  "accept_length": 3.58,
+  "recall": true,
+  "vram_peak_mib": 72748,
+  "error": null
+ },
+ {
+  "target": 643072,
+  "prompt_tokens": 643083,
+  "completion_tokens": 2048,
+  "ttft_s": 371.41,
+  "prefill_tok_s": 1731,
+  "decode_tok_s": 58.4,
+  "accept_length": 3.54,
+  "recall": true,
+  "vram_peak_mib": 72752,
+  "error": null
+ },
+ {
+  "target": 774144,
+  "prompt_tokens": 774136,
+  "completion_tokens": 2048,
+  "ttft_s": 505.44,
+  "prefill_tok_s": 1532,
+  "decode_tok_s": 64.5,
+  "accept_length": 3.64,
+  "recall": true,
+  "vram_peak_mib": 72750,
+  "error": null
+ },
+ {
+  "target": 905216,
+  "prompt_tokens": 905240,
+  "completion_tokens": 2048,
+  "ttft_s": 660.26,
+  "prefill_tok_s": 1371,
+  "decode_tok_s": 57.9,
+  "accept_length": 3.62,
+  "recall": true,
+  "vram_peak_mib": 72766,
+  "error": null
+ },
+ {
+  "target": 1036288,
+  "prompt_tokens": 1036308,
+  "completion_tokens": 2048,
+  "ttft_s": 822.1,
+  "prefill_tok_s": 1261,
+  "decode_tok_s": 68.7,
+  "accept_length": 3.72,
+  "recall": true,
+  "vram_peak_mib": 72826,
+  "error": null
+ }
+]

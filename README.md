@@ -64,8 +64,33 @@ Speeds at 8 context lengths from 4K to 500K and a context ladder up to 896K are 
 
 预填充时注意力与索引器的工作区随上下文增长（约 5.4 MiB / 1K token），1M 的 KV 池本身也比 512K 多占约 0.9 GB，所以这张卡上
 上限是 768K。KV 池设为 786,432 后按满容量复测：782,979 输入 + 2,048 输出通过（首 token 523 s，decode 62.8 tok/s，
-`results/kv-768k-check-20261001.json`）。这一档显存几乎用满（分配器需要回收缓存才能继续），余量很小；要更稳可用 640K
+`results/kv-768k-check-20261001.json`）。按块累加之前，这一档显存几乎用满（分配器需要回收缓存才能继续），余量很小；要更稳可用 640K
 （655,360）。
+
+### GPU 预填充按块累加后（2026-10-01）
+
+lkqmoe GPU 预填充改为每块 8 个专家、每块的路由结果立即按 FP32 加进逐 token 累加缓冲（`LKQMOE_PREFILL_EXPERT_CHUNK=8
+LKQMOE_PREFILL_ROUTE_ACCUM=1`），不再为整个 32K 分块保留 [32K×6, 5120] 的 FP32 路由缓冲（4.0 GB）。真实权重单层（第 20 层，
+32K token）：工作区 6.4 → 1.8 GiB，耗时 174 → 164 ms；对 FP64 参考的误差不变（1.71e-3），99.9995% 的输出与原算法逐位相同，
+其余只差 FP32 加法顺序。
+
+同样的阶梯（KV 池 1M，每档输出 2K），这次 1M 输入也能跑完（`results/kv-ladder-1m-accum-20261001.json`）：
+
+| 输入 token | 首 token 时间 | 预填充 tok/s | decode tok/s | 接受长度 | 找回埋藏事实 |
+|---:|---:|---:|---:|---:|:---:|
+| 512,016 | 262.86 s | 1,948 | 61.3 | 3.58 | 是 |
+| 643,083 | 371.41 s | 1,731 | 58.4 | 3.54 | 是 |
+| 774,136 | 505.44 s | 1,532 | 64.5 | 3.64 | 是 |
+| 905,240 | 660.26 s | 1,371 | 57.9 | 3.62 | 是 |
+| 1,036,308 | 822.1 s | 1,261 | 68.7 | 3.72 | 是 |
+
+**但 KV 池超过 768K 时短输入会出错**：池设为 917,504 或 1,048,576 时，≤8K token 的提示稳定找不回埋藏事实（每次答出不同的错误编号），
+16K 及以上正常；同样的代码与设置把池改回 786,432 后全部正常（2K/4K/8K/16K 各点实测）。问题在框架的稀疏注意力 / 索引器路径
+（与 lkqmoe、FP8 `wo_a` 无关：还没开按块累加时的 1M 池也出现过），原因尚未定位。所以 KV 池仍用 786,432。
+
+768K 池 + 按块累加的最终复验：三点 预填充 1,958 / 3,208 / 2,805 tok/s，decode
+58.5 / 58.4 / 59.8 tok/s，全部找回；满容量 782,989 输入 + 2,048 输出通过
+（首 token 524.34 s，decode 78.0 tok/s）。
 
 与官方原版（同一机器，官方 DeepSeek V4.1 检查点 + 闭源 lk_moe，2026-09-17）对比，三点测试 `bench/ds41_3point.py`：
 
@@ -88,7 +113,7 @@ Speeds at 8 context lengths from 4K to 500K and a context ladder up to 896K are 
   释放 BF16 副本，省 1.25 GiB。decode 用 FP8 版 Triton 分组 einsum（与 BF16 版对 FP64 参考的误差相同），预填充反量化到复用缓冲后
   沿用原 einsum（逐位一致）。`LKQMOE_DS41_WO_A_FP8=0` 恢复 BF16。
 - DSpark：块大小 5，每步验证 6 个 token（`static` 全验证，贪心解码无损）。
-- 预填充：短输入 CPU、长输入 GPU（lkqmoe 按专家分块上传权重的 Triton 内核），中间长度 CPU+GPU 混合；32K 分块。
+- 预填充：短输入 CPU、长输入 GPU（lkqmoe 按专家分块上传权重的 Triton 内核，每块 8 个专家、路由结果按块 FP32 累加），中间长度 CPU+GPU 混合；32K 分块。
 - SWA 尾部有界重放（`--enable-decoder-swa-bounded-replay`），FP4 索引器（`--enable-deepseek-v4-fp4-indexer`）。
 
 ## 环境搭建
@@ -123,7 +148,7 @@ Speeds at 8 context lengths from 4K to 500K and a context ladder up to 896K are 
 --reasoning-parser deepseek-v41 --tool-call-parser deepseekv41
 LVLLM_GPU_RESIDENT_MOE_LAYERS=20-23  LVLLM_GPU_RESIDENT_MOE_LAYERS_DSPARK=0-2  SGLANG_RAGGED_VERIFY_MODE=static
 LKQMOE_THREADS=112  LKQMOE_DOWN_BF16=1  LKQMOE_DYNAMIC=2  LKQMOE_FP8_CONFIGS=1  LKQMOE_DS41_WO_A_TRITON=1
-LKQMOE_DS41_WO_A_FP8=1
+LKQMOE_DS41_WO_A_FP8=1  LKQMOE_PREFILL_EXPERT_CHUNK=8  LKQMOE_PREFILL_ROUTE_ACCUM=1
 ```
 完整列表见 `launch/run-ds41-nvfp4.sh`。上面 8 点速度表是 KV 池 524,288 时测的。
 
