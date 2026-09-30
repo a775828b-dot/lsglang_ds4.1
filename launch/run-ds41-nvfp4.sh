@@ -11,7 +11,7 @@ VENV=${VENV:-$LSGLANG/env}                             # python 3.12, see README
 FLASHINFER_SM120=${FLASHINFER_SM120:-}                 # optional: FlashInfer 0.6.18 SM120 build (python path)
 MODEL=${MODEL:-/models/nvidia/DeepSeek-V4.1-Flash-NVFP4}
 DRAFT=${DRAFT:-/models/DeepSeek-V4.1-Flash-dspark-slim}  # bench/make_draft_slim.py, or the official checkpoint
-LOADER_SCRATCH=${LOADER_SCRATCH:-/scratch/ds41-loader}   # NVMe, >= 320 GiB free (lk_moe NVMe staging while loading)
+LOADER_SCRATCH=${LOADER_SCRATCH:-/scratch/ds41-loader}   # NVMe, >= 320 GiB free (FP4 weight staging while loading)
 RUN_DIR=${RUN_DIR:-$REPO/run}
 PORT=${PORT:-39503}
 
@@ -62,7 +62,7 @@ export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 # ---- lkqmoe (compiled, ../lkqmoe) -----------------------------------------------------------
 lkq="$REPO/lkqmoe"
 export PYTHONPATH="$lkq/python:$PYTHONPATH"
-export LKQMOE_MODE=standalone LKQMOE_CLOSED_FALLBACK=1 LKQMOE_CHAIN_SITECUSTOMIZE=1 \
+export LKQMOE_MODE=standalone LKQMOE_CLOSED_FALLBACK=0 LKQMOE_CHAIN_SITECUSTOMIZE=1 \
   LKQMOE_LIBRARY="$lkq/liblkqmoe.so" LKQMOE_ZERO_COPY=1 LKQMOE_PREFILL_UNPACK=1 \
   LKQMOE_PREFILL_PREFETCH=1 LKQMOE_CPU_PREFILL_BATCH=2048 LKQMOE_SPIN_COUNT=1048576 \
   LKQMOE_ORIGINAL_WARMUP=0 LKQMOE_STATS_DIR="$RUN_DIR/lkqmoe-stats"

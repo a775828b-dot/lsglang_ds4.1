@@ -64,7 +64,7 @@ jsonschema-specifications==2025.9.1
 kernels==0.14.1
 kernels-data==0.16.0
 lark==1.3.1
-lk_moe==2.4.3  # lk_moe release wheel
+# lk_moe==2.4.3 was installed on the measurement host but is not loaded (lkqmoe provides the lk_moe module)
 llguidance==1.7.6
 llvmlite==0.47.0
 loguru==0.7.3

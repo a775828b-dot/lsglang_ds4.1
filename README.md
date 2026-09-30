@@ -62,7 +62,7 @@ Speeds at 8 context lengths from 4K to 500K are below.*
 
 ## 运行方式
 
-- 4 个 MoE 层常驻 GPU（第 20–23 层），3 个 DSpark 草稿层在 GPU；其余 39 层的路由专家在 CPU（lkqmoe，112 线程）。
+- 4 个 MoE 层常驻 GPU（第 20–23 层），3 个 DSpark 草稿层在 GPU；目标模型共 40 层，其余 36 层的路由专家在 CPU（lkqmoe，112 线程）。
 - 共享专家、注意力、索引器全在 GPU；KV 缓存 FP8（512K 约 2.6 GB），索引器 FP4。
 - DSpark：块大小 5，每步验证 6 个 token（`static` 全验证，贪心解码无损）。
 - 预填充：短输入 CPU、长输入 GPU（lkqmoe 按专家分块上传权重的 Triton 内核），中间长度 CPU+GPU 混合；32K 分块。
@@ -78,8 +78,8 @@ Speeds at 8 context lengths from 4K to 500K are below.*
    ```
 2. Python 3.12 虚拟环境（`/opt/Lsglang/env`），按 Lsglang v1.4.12 的 wheel 发布包安装，版本见 `requirements-lock.txt`
    （torch 2.13.0、triton 3.7.1、flashinfer 0.6.17、transformers 5.12.1）。
-   **`lk_moe` 2.4.3 需要另外安装**（Lsglang 作者发布的闭源库，本仓库不再分发；管线的 Engram/Embedding 与加载路径仍用到它，
-   MoE 计算由 lkqmoe 负责）。可选：SM120 版 FlashInfer 0.6.18，用 `FLASHINFER_SM120` 指向。
+   **不需要安装 `lk_moe`**：`LKQMOE_MODE=standalone`（`LKQMOE_CLOSED_FALLBACK=0`）时 lkqmoe 直接提供 `lk_moe` 模块，闭源包不会被加载。
+   这套配置里只有 NVFP4 的 CPU 层用到该接口；DSpark 草稿层（MXFP4）全部常驻 GPU，不经过它。可选：SM120 版 FlashInfer 0.6.18，用 `FLASHINFER_SM120` 指向。
 3. 模型：下载上面两个检查点；草稿副本 `python bench/make_draft_slim.py <官方检查点> <输出目录>`。
 4. 按需修改 `launch/run-ds41-nvfp4.sh` 开头的路径，启动：
    ```sh
