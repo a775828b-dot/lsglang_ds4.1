@@ -1,0 +1,14 @@
+[
+ {
+  "target": 1036288,
+  "prompt_tokens": 1036292,
+  "completion_tokens": 2048,
+  "ttft_s": 837.59,
+  "prefill_tok_s": 1237,
+  "decode_tok_s": 68.3,
+  "accept_length": 3.7,
+  "recall": true,
+  "vram_peak_mib": 72816,
+  "error": null
+ }
+]

@@ -29,3 +29,8 @@ if os.environ.get('LKQMOE_CHAIN_SITECUSTOMIZE') == '1':
         elif after and os.path.isfile(os.path.join(directory, 'sitecustomize.py')):
             runpy.run_path(os.path.join(directory, 'sitecustomize.py'), run_name='sitecustomize_chained')
             break
+# Hooks that must wrap modules the runtime overlay provides go after the chain above, so their finders sit
+# in front of the overlay's.
+if os.environ.get('LKQMOE_DS41_SPLIT_ZERO') == '1':
+    from lkqmoe.gpu.ds41_split_zero import install as install_ds41_split_zero
+    install_ds41_split_zero()

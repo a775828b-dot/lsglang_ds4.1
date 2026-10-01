@@ -20,8 +20,7 @@ MAIN_LAYERS=${MAIN_LAYERS:-4}          # GPU-resident MoE layers of the target m
 RESIDENT_START=${RESIDENT_START:-20}
 ENGRAM_CACHE_GIB=${ENGRAM_CACHE_GIB:-12}
 BATCH_TOKENS=${BATCH_TOKENS:-32768}    # chunked prefill size
-KV_TOKENS=${KV_TOKENS:-786432}         # do not go above 786432: with a 917504 or 1048576 pool prompts of <= 8K tokens
-                                       # lose recall (framework attention issue, see README); 1M inputs themselves fit
+KV_TOKENS=${KV_TOKENS:-1048576}        # pools above 786432 need LKQMOE_DS41_SPLIT_ZERO=1 (set below), see README
 GPU_MEMORY=${GPU_MEMORY:-0.95}
 LKQ_THREADS=${LKQ_THREADS:-112}        # 64 = physical cores, 112 = + 12 SMT siblings per NUMA node
 
@@ -79,6 +78,7 @@ export LKQMOE_FP8_CONFIGS=1         # tuned SM120 configs for the Triton block-F
 export LKQMOE_DS41_WO_A_TRITON=1    # decode wo_a on the Triton grouped einsum
 export LKQMOE_DS41_WO_A_FP8=1       # keep wo_a in the checkpoint's FP8 (exact, 1.25 GiB less VRAM); 0 = BF16
 export LKQMOE_PREFILL_EXPERT_CHUNK=8 LKQMOE_PREFILL_ROUTE_ACCUM=1   # GPU prefill: 8-expert chunks, FP32 route accumulation
+export LKQMOE_DS41_SPLIT_ZERO=1      # zero the reserved page of the SM120 page-split scratch (NaN fix, see README)
 if [[ "$LKQ_THREADS" == 112 ]]; then
   export LKQMOE_THREADS=112 LKQMOE_PROBE_DISPATCH_CPU=95 LKQMOE_MAIN_CPUS=76-79,92-94,108-111,124-127
 else

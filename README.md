@@ -1,13 +1,13 @@
 # lsglang_ds4.1
 
-DeepSeek V4.1 Flash NVFP4 单卡推理管线：一张 RTX PRO 5000 72GB + 双路 EPYC，768K 上下文（实测上限），DSpark 投机解码。
+DeepSeek V4.1 Flash NVFP4 单卡推理管线：一张 RTX PRO 5000 72GB + 双路 EPYC，1M 上下文，DSpark 投机解码。
 框架是 [guqiong96/Lsglang](https://github.com/guqiong96/Lsglang)（sglang 的 CPU/GPU 混合推理分支），CPU 层的路由专家由受
 [lk_moe](https://github.com/guqiong96/Lsglang)（lsglang 作者 guqiong96 的 CPU MoE 后端）启发、并针对 NVFP4 格式专项加速的
 **lkqmoe** 承担计算（本仓库附编译好的闭源版本）。
 
-*English: a single-GPU DeepSeek V4.1 Flash NVFP4 pipeline (RTX PRO 5000 72GB + 2x EPYC 9334, 768K context (measured limit), DSpark speculative
+*English: a single-GPU DeepSeek V4.1 Flash NVFP4 pipeline (RTX PRO 5000 72GB + 2x EPYC 9334, 1M context, DSpark speculative
 decoding) on guqiong96/Lsglang, with the CPU-side routed experts on lkqmoe, an NVFP4-specialised MoE kernel inspired by lk_moe (by guqiong96, the author of lsglang); a compiled, closed-source build is included here.
-Speeds at 8 context lengths from 4K to 500K and a context ladder up to 896K are below.*
+Speeds at 8 context lengths from 128K to 1M (1M/8 spacing) are below.*
 
 ## 组成
 
@@ -32,6 +32,29 @@ Speeds at 8 context lengths from 4K to 500K and a context ladder up to 896K are 
 | 系统 | Ubuntu 24.04.4，内核 7.0.0-31，Python 3.12.3 |
 
 ## 速度
+
+测试条件：单请求，温度 0，`ignore_eos`，每点输出 1024 token；输入是长日志文本，在 10% 深度埋一条事实并在末尾提问
+（`bench/speed_points.py --exact`，输入长度精确到目标 ±0.05%）。KV 池 1,048,576，8 个点按 1M/8 等间隔取样（最后一点留出输出的位置）。
+DSpark 开启，4 层 GPU 常驻，FP8 `wo_a`、GPU 预填充按块累加、SM120 拆页暂存清零（见下文），其余见“运行方式”。2026-10-01 实测，
+原始数据 `results/speed-points-1m-20261001.json`。
+
+| 输入 token | 首 token 时间 | 预填充 tok/s | decode tok/s | 平均接受长度 | 找回埋藏事实 | 显存峰值 |
+|---:|---:|---:|---:|---:|:---:|---:|
+| 131,068 | 39.06 s | 3,355 | 55.2 | 3.66 | 是 | 72,362 MiB |
+| 262,108 | 96.15 s | 2,726 | 58.1 | 3.64 | 是 | 72,364 MiB |
+| 393,205 | 170.84 s | 2,302 | 52.7 | 3.57 | 是 | 72,740 MiB |
+| 524,272 | 267.37 s | 1,961 | 55.7 | 3.54 | 是 | 72,620 MiB |
+| 655,344 | 379.76 s | 1,726 | 52.3 | 3.5 | 是 | 72,824 MiB |
+| 786,442 | 519.23 s | 1,515 | 49.5 | 3.46 | 是 | 72,820 MiB |
+| 917,483 | 676.55 s | 1,356 | 47.7 | 3.4 | 是 | 72,800 MiB |
+| 1,046,918 | 834.19 s | 1,255 | 50.1 | 3.39 | 是 | 72,822 MiB |
+
+1M 满容量另测一次（1,036,292 输入 + 2,048 输出）：首 token 837.59 s，decode 68.3 tok/s，找回正确
+（`results/kv-1m-check-splitzero-20261001.json`）。1M 满载时显存几乎用满，能跑通但余量小。
+
+同一配置的三点测试：预填充 1,605 / 3,120 / 2,819 tok/s，decode 65.3 / 61.9 / 56.3 tok/s，全部找回。
+
+### 早先数据：4K–521K（2026-09-30，KV 池 524,288）
 
 测试条件：单请求，温度 0，`ignore_eos`，每点输出 1024 token；输入是长日志文本，在 10% 深度埋一条事实并在末尾提问（`bench/speed_points.py`）。DSpark 开启，4 层 GPU 常驻，其余见“运行方式”。2026-09-30 实测，原始数据 `results/speed-points-20260930.json`。
 
@@ -84,13 +107,17 @@ LKQMOE_PREFILL_ROUTE_ACCUM=1`），不再为整个 32K 分块保留 [32K×6, 512
 | 905,240 | 660.26 s | 1,371 | 57.9 | 3.62 | 是 |
 | 1,036,308 | 822.1 s | 1,261 | 68.7 | 3.72 | 是 |
 
-**但 KV 池超过 768K 时短输入会出错**：池设为 917,504 或 1,048,576 时，≤8K token 的提示稳定找不回埋藏事实（每次答出不同的错误编号），
-16K 及以上正常；同样的代码与设置把池改回 786,432 后全部正常（2K/4K/8K/16K 各点实测）。问题在框架的稀疏注意力 / 索引器路径
-（与 lkqmoe、FP8 `wo_a` 无关：还没开按块累加时的 1M 池也出现过），原因尚未定位。所以 KV 池仍用 786,432。
+**KV 池超过 768K 时的 NaN（已修复）**：池设为 917,504 或 1,048,576 时，每个提示前约 1K token 在压缩比 2 的注意力层输出 NaN
+（上面的找回测试里表现为 ≤8K 的提示答错，16K 及以上正常）。原因：SM120 上 sglang 的 `flash_mla_sm120._split_kv_pages_to_64` 把被引用的
+128/256 槽位页拷进一块持久的 64 槽位页暂存缓冲（`torch.empty`，只拷被引用的页）；FlashInfer 的 SM120 稀疏 MLA 核函数把无效的 top-k
+位置（候选不足 top-k 时补的 -1）改读槽位 0，分数屏蔽，但 V 仍以概率 0 参与累加。槽位 0 所在的保留页从不被引用、从不被拷贝，
+内容是显存分配器留下的残留；残留里有 NaN/Inf 时 0×NaN=NaN。暂存缓冲随池大小变化，落在哪块显存也随之变化，所以 768K 时碰巧干净。
+修复：`lkqmoe/python/lkqmoe/gpu/ds41_split_zero.py`（`LKQMOE_DS41_SPLIT_ZERO=1`），暂存缓冲每次分配时把前 4 页清零，之后它们不会再被写，
+没有运行时开销。修复后 1M 池下逐层检查 200 次注意力调用无 NaN，889–32K 的短提示全部找回。根本的修法应在核函数里屏蔽无效位置的 V，
+或把暂存缓冲初始化为 0。
 
-768K 池 + 按块累加的最终复验：三点 预填充 1,958 / 3,208 / 2,805 tok/s，decode
-58.5 / 58.4 / 59.8 tok/s，全部找回；满容量 782,989 输入 + 2,048 输出通过
-（首 token 524.34 s，decode 78.0 tok/s）。
+768K 池（修复之前的生产配置）的复验：三点 预填充 1,958 / 3,208 / 2,805 tok/s，decode 58.5 / 58.4 / 59.8 tok/s，全部找回；
+满容量 782,989 输入 + 2,048 输出通过（首 token 524.34 s，decode 78.0 tok/s）。
 
 与官方原版（同一机器，官方 DeepSeek V4.1 检查点 + 闭源 lk_moe，2026-09-17）对比，三点测试 `bench/ds41_3point.py`：
 
@@ -140,7 +167,7 @@ LKQMOE_PREFILL_ROUTE_ACCUM=1`），不再为整个 32K 分块保留 [32K×6, 512
 ## 主要启动参数
 
 ```
---chunked-prefill-size 32768 --max-prefill-tokens 32768 --context-length 786432 --max-total-tokens 786432
+--chunked-prefill-size 32768 --max-prefill-tokens 32768 --context-length 1048576 --max-total-tokens 1048576
 --mem-fraction-static 0.95 --max-running-requests 4 --moe-runner-backend flashinfer_cutlass --disable-shared-experts-fusion
 --cuda-graph-backend-decode full --cuda-graph-backend-prefill disabled
 --speculative-algorithm DSPARK --speculative-dspark-block-size 5 --speculative-num-draft-tokens 6
@@ -148,15 +175,15 @@ LKQMOE_PREFILL_ROUTE_ACCUM=1`），不再为整个 32K 分块保留 [32K×6, 512
 --reasoning-parser deepseek-v41 --tool-call-parser deepseekv41
 LVLLM_GPU_RESIDENT_MOE_LAYERS=20-23  LVLLM_GPU_RESIDENT_MOE_LAYERS_DSPARK=0-2  SGLANG_RAGGED_VERIFY_MODE=static
 LKQMOE_THREADS=112  LKQMOE_DOWN_BF16=1  LKQMOE_DYNAMIC=2  LKQMOE_FP8_CONFIGS=1  LKQMOE_DS41_WO_A_TRITON=1
-LKQMOE_DS41_WO_A_FP8=1  LKQMOE_PREFILL_EXPERT_CHUNK=8  LKQMOE_PREFILL_ROUTE_ACCUM=1
+LKQMOE_DS41_WO_A_FP8=1  LKQMOE_PREFILL_EXPERT_CHUNK=8  LKQMOE_PREFILL_ROUTE_ACCUM=1  LKQMOE_DS41_SPLIT_ZERO=1
 ```
-完整列表见 `launch/run-ds41-nvfp4.sh`。上面 8 点速度表是 KV 池 524,288 时测的。
+完整列表见 `launch/run-ds41-nvfp4.sh`。
 
 ## lkqmoe（`lkqmoe/`）
 
 - `liblkqmoe.so`（CPU 内核）、`liblkqmoe_cuda.so`（CUDA 信箱桥，可被 CUDA Graph 捕获）、`python/lkqmoe/*.pyc`（lsglang 适配层与
   Triton GPU 预填充，编译版；含 Triton 内核的模块把源码压缩内嵌，因为 Triton 编译时需要读取源码）。
-- 开源部分（Apache-2.0）：`python/sitecustomize.py`、`python/lkqmoe/gpu/`（DeepSeek `wo_a` 的 Triton 分组 einsum 与 FP8 权重、
+- 开源部分（Apache-2.0）：`python/sitecustomize.py`、`python/lkqmoe/gpu/`（DeepSeek `wo_a` 的 Triton 分组 einsum 与 FP8 权重、SM120 拆页暂存保留页清零的修复、
   SM120 下 Triton 块 FP8 GEMM 的调优配置）、`tools/shard_prefetch.py`（加载时顺序预读权重）。
 - 二进制许可见 `lkqmoe/LICENSE`：可免费使用、原样再分发；源码不公开。
 - 硬件要求：x86-64 AVX512-BF16（VBMI 更快），4 个 NUMA 节点 × 16 物理核（其他拓扑未验证），CUDA GPU。
