@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # DeepSeek V4.1 Flash NVFP4 + DSpark on one RTX PRO 5000 72GB (SM120) + 2x EPYC 9334 (4 NUMA nodes).
-# Routed experts of the CPU layers run on lkqmoe (compiled, ../lkqmoe); 4 layers stay on the GPU.
+# Routed experts of the CPU layers run on lkqmoe (compiled, ../lkqmoe); with LKQstrata (default) their hot experts
+# also get GPU slots (lkqmoe 0.5.0 expert pool) and 2 layers stay whole on the GPU.
 # This is the launch used for the measurements in README.md; edit the paths block first.
 set -Eeuo pipefail
 
@@ -16,11 +17,18 @@ RUN_DIR=${RUN_DIR:-$REPO/run}
 PORT=${PORT:-39503}
 
 # ---- settings used for the published numbers --------------------------------------------
-MAIN_LAYERS=${MAIN_LAYERS:-4}          # GPU-resident MoE layers of the target model (20-23)
-RESIDENT_START=${RESIDENT_START:-20}
-ENGRAM_CACHE_GIB=${ENGRAM_CACHE_GIB:-12}
+# LKQstrata (default, 512K + 2 concurrent requests): the last 2 layers of the decode segment (22-23) stay whole on
+# the GPU; every other MoE layer runs on lkqmoe with 23 GPU slots for its hot experts (ranking profile + adaptive
+# LFU swaps). Layers 21-39 prefill only the last 128 tokens (SWA bounded replay), so this costs prefill almost nothing.
+# Previous release (classic, 1M): LKQSTRATA=0 MAIN_LAYERS=4 RESIDENT_START=20 ENGRAM_CACHE_GIB=12 KV_TOKENS=1048576 MAX_REQUESTS=4
+LKQSTRATA=${LKQSTRATA:-1}
+LKQSTRATA_SLOTS=${LKQSTRATA_SLOTS:-23}  # per CPU layer; 23 x 38 layers = 16.2 GiB of VRAM
+MAIN_LAYERS=${MAIN_LAYERS:-2}          # GPU-resident MoE layers of the target model (22-23)
+RESIDENT_START=${RESIDENT_START:-22}
+ENGRAM_CACHE_GIB=${ENGRAM_CACHE_GIB:-4}
 BATCH_TOKENS=${BATCH_TOKENS:-32768}    # chunked prefill size
-KV_TOKENS=${KV_TOKENS:-1048576}        # pools above 786432 need LKQMOE_DS41_SPLIT_ZERO=1 (set below), see README
+KV_TOKENS=${KV_TOKENS:-524288}         # context; pools above 786432 need LKQMOE_DS41_SPLIT_ZERO=1 (set below)
+MAX_REQUESTS=${MAX_REQUESTS:-2}
 GPU_MEMORY=${GPU_MEMORY:-0.95}
 LKQ_THREADS=${LKQ_THREADS:-112}        # 64 = physical cores, 112 = + 12 SMT siblings per NUMA node
 
@@ -79,6 +87,7 @@ export LKQMOE_DS41_WO_A_TRITON=1    # decode wo_a on the Triton grouped einsum
 export LKQMOE_DS41_WO_A_FP8=1       # keep wo_a in the checkpoint's FP8 (exact, 1.25 GiB less VRAM); 0 = BF16
 export LKQMOE_PREFILL_EXPERT_CHUNK=8 LKQMOE_PREFILL_ROUTE_ACCUM=1   # GPU prefill: 8-expert chunks, FP32 route accumulation
 export LKQMOE_DS41_SPLIT_ZERO=1      # zero the reserved page of the SM120 page-split scratch (NaN fix, see README)
+export LKQSTRATA="$LKQSTRATA" LKQSTRATA_SLOTS="$LKQSTRATA_SLOTS" LKQSTRATA_PROFILE="$lkq/lkqstrata-ds41.json"
 if [[ "$LKQ_THREADS" == 112 ]]; then
   export LKQMOE_THREADS=112 LKQMOE_PROBE_DISPATCH_CPU=95 LKQMOE_MAIN_CPUS=76-79,92-94,108-111,124-127
 else
@@ -93,7 +102,7 @@ cd "$LSGLANG"
 exec "$VENV/bin/python" -m sglang.launch_server \
   --model-path "$MODEL" --served-model-name DeepSeek-V4.1-Flash \
   --host 127.0.0.1 --port "$PORT" --trust-remote-code --tensor-parallel-size 1 \
-  --max-running-requests 4 --chunked-prefill-size "$BATCH_TOKENS" --max-prefill-tokens "$BATCH_TOKENS" \
+  --max-running-requests "$MAX_REQUESTS" --chunked-prefill-size "$BATCH_TOKENS" --max-prefill-tokens "$BATCH_TOKENS" \
   --context-length "$KV_TOKENS" --max-total-tokens "$KV_TOKENS" --mem-fraction-static "$GPU_MEMORY" \
   --moe-runner-backend flashinfer_cutlass --disable-shared-experts-fusion \
   --cuda-graph-backend-prefill disabled --cuda-graph-backend-decode full \

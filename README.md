@@ -28,10 +28,53 @@ decoding) on guqiong96/Lsglang, with the CPU-side routed experts on lkqmoe, an N
 | CPU | 2× AMD EPYC 9334（共 64 核 128 线程），NPS2 → 4 个 NUMA 节点，AVX512-BF16/VBMI |
 | 内存 | 320 GB DDR5-4800（20× 16 GB），实测带宽约 511 GB/s |
 | GPU | NVIDIA RTX PRO 5000 72GB Blackwell（SM120），驱动 595.84，CUDA 13.2 |
-| 存储 | Engram 表与加载暂存用 Intel Optane P5800X，模型放普通 NVMe |
+| 存储 | Engram 表与加载暂存用 Intel Optane P5800X，模型放三星 990 PRO（有 DRAM 缓存） |
 | 系统 | Ubuntu 24.04.4，内核 7.0.0-31，Python 3.12.3 |
 
 ## 速度
+
+### 本版（2026-10-15）：512K + 2 并发，LKQstrata 热专家池
+
+上一版把第 20–23 层整层放在 GPU，KV 池 1M，最多 4 个请求。本版把显存重新分配：只有解码段末尾的第 22–23 层整层常驻，
+其余 38 个 CPU 层每层 23 个"热专家"槽位（共 16.2 GiB）。这些层 decode 时，在槽位里的专家由 GPU 计算（W4A16），其余由 CPU
+（lkqmoe）计算，两边同时进行，最后相加；槽位启动时按排名表（`lkqmoe/lkqstrata-ds41.json`）装填，运行中按路由统计自适应换入
+换出（每 4 个验证窗口一轮，拷贝不阻塞计算）。实测每层 34–39% 的路由由 GPU 承担。第 21–39 层预填充只算每个请求末尾 128 个
+token（SWA 尾部有界重放），所以多放到 CPU 的层几乎不影响首 token。专家池用掉了原先给 1M KV 的显存，本版上下文 512K。
+
+**长上下文打点（温度 0）**：方法同下面上一版的表（`bench/speed_points.py --exact`，同一批文档，每点输出 1024 token）。上一版是
+2026-10-01 的 1M 配置，本版 2026-10-15（`results/speed-points-20261015-lkqstrata.json`）。上一版最接近 500K 的点是 524,272。
+
+| 输入 token | 首 token 时间 上一版 → 本版 | 预填充 tok/s 上一版 → 本版 | decode tok/s 上一版 → 本版 | 接受长度 上一版 → 本版 | 找回埋藏事实 | 显存峰值 上一版 → 本版 |
+|---:|---:|---:|---:|---:|:---:|---:|
+| 131K | 39.1 → 38.4 s | 3,355 → 3,410 | 55.2 → **73.7**（+34%） | 3.66 → 3.34 | 是 | 72,362 → 71,518 MiB |
+| 262K | 96.2 → 93.7 s | 2,726 → 2,796 | 58.1 → **92.9**（+60%） | 3.64 → 3.36 | 是 | 72,364 → 71,518 MiB |
+| 393K | 170.8 → 168.0 s | 2,302 → 2,341 | 52.7 → **63.7**（+21%） | 3.57 → 3.36 | 是 | 72,740 → 71,518 MiB |
+| 524,272 → 499,961 | 267.4 → 245.0 s | 1,961 → 2,041 | 55.7 → **87.9**（+58%） | 3.54 → 3.33 | 是 | 72,620 → 71,518 MiB |
+
+- decode 4 点平均 55.4 → **79.6 tok/s（+44%）**；首 token 时间相同或略快。单点 decode 随生成内容波动（接受长度不同），比较看平均。
+
+**同一晚 A/B**（两种布局都是 512K、最多 2 个请求、Engram 行缓存 4 GiB、lkqmoe 0.5.0；`results/ab-20261015-lkqstrata.json`）。
+"每步"是贪心解码（温度 0，8 个固定提示，每请求 512 token）时流式输出块的间隔中位数，即一次 DSpark 验证的耗时，不受接受长度影响，
+每轮波动 < 3%（`bench/step_chat.py`）：
+
+| | 上一版布局（20–23 常驻，不开池） | 本版（22–23 常驻 + 38 层 × 23 槽） | 速度 |
+|---|---:|---:|---:|
+| 3 点（8K / 79K / 223K）平均每步 | 60.6 ms | 48.1 ms | +26% |
+| 3 点 decode tok/s | 62.9 / 63.4 / 59.2 | 74.9 / 75.0 / 72.0 | |
+| 1 并发：每步 / 吞吐 | 55.0 ms / 65.8 tok/s | 41.3 ms / **84.9 tok/s** | **+29%** |
+| 2 并发：每步 / 总吞吐 | 103.9 ms / 59.8 tok/s | 80.6 ms / **80.6 tok/s** | **+35%** |
+| 500K：decode / 首 token | 57.5 tok/s / 243.8 s | **87.9** tok/s / 245.0 s | +53% |
+| 500K 显存峰值 | 72,404 MiB | 71,518 MiB | |
+| 主机最低可用内存 | 29.0 GiB | 13.6 GiB | |
+
+- 温度 1.0 的并发测试（`bench/conc_chat.py`，每请求 512 token，4 轮）：1 并发 63.8 → 82.9 tok/s，2 并发总吞吐 59.3 → 76.5 tok/s
+  （每轮波动约 ±20%，只作参考）。两个请求共用 524,288 token 的 KV 池，单个对话可以用满 512K。
+- 精度：池里 GPU 计算的专家是 W4A16、BF16 中间结果，在真实层上对 FP64 参考的相对误差 1.6e-3，与 CPU 路径默认的 BF16 Down
+  （约 1.5e-3）同一量级，都细于官方参考实现的 FP8/FP4 激活；所有长度的埋藏事实都找回。
+- 内存：38 个 CPU 层的专家分片约 285 GB，加 Engram 行缓存 4 GiB；320 GB 内存的本机最低还剩 13.6 GiB。
+- 回到上一版（1M、4 层常驻）：`LKQSTRATA=0 MAIN_LAYERS=4 RESIDENT_START=20 ENGRAM_CACHE_GIB=12 KV_TOKENS=1048576 MAX_REQUESTS=4 bash launch/run-ds41-nvfp4.sh`。
+
+### 上一版（2026-10-01）：1M 上下文，第 20–23 层整层常驻
 
 单请求，温度 0，`ignore_eos`，每点输出 1024 token；输入是长日志文本，在 10% 深度埋一条事实并在末尾提问
 （`bench/speed_points.py --exact`）。KV 池 1,048,576，8 个点按 1M/8 等间隔取样。原始数据 `results/speed-points-1m-20261001.json`。
@@ -59,7 +102,8 @@ decoding) on guqiong96/Lsglang, with the CPU-side routed experts on lkqmoe, an N
 
 ## 运行方式
 
-- 目标模型 40 层：4 个 MoE 层常驻 GPU（第 20–23 层），其余 36 层的路由专家在 CPU（lkqmoe，112 线程）；3 个 DSpark 草稿层在 GPU。
+- 目标模型 40 层：本版第 22–23 层整层常驻 GPU，其余 38 层的路由专家在 CPU（lkqmoe，112 线程），每层另有 23 个热专家槽位在 GPU
+  （LKQstrata）；上一版是第 20–23 层常驻、36 层在 CPU。3 个 DSpark 草稿层在 GPU。
 - 共享专家、注意力、索引器在 GPU；KV 缓存 FP8，索引器 FP4；32K 分块预填充，SWA 尾部有界重放。
 - DSpark：块大小 5，每步验证 6 个 token（`static` 全验证，贪心解码无损）。
 - 预填充：短输入 CPU、长输入 GPU（lkqmoe 的 Triton 内核按 8 个专家一块上传权重，路由结果按块 FP32 累加），中间长度 CPU+GPU 混合。
@@ -80,20 +124,22 @@ decoding) on guqiong96/Lsglang, with the CPU-side routed experts on lkqmoe, an N
    直接提供 `lk_moe` 模块。可选：SM120 版 FlashInfer 0.6.18，用 `FLASHINFER_SM120` 指向。
 3. 模型：下载上面两个检查点；草稿副本 `python bench/make_draft_slim.py <官方检查点> <输出目录>`。
 4. 按需修改 `launch/run-ds41-nvfp4.sh` 开头的路径后启动：`bash launch/run-ds41-nvfp4.sh`。
-   服务在 `127.0.0.1:39503`，OpenAI 兼容接口，模型名 `DeepSeek-V4.1-Flash`，冷加载约 8–14 分钟。
+   服务在 `127.0.0.1:39503`，OpenAI 兼容接口，模型名 `DeepSeek-V4.1-Flash`。加载器按 4 KiB 页随机读多个分片，模型盘要用有 DRAM
+   缓存的 NVMe：本机三星 990 PRO 上约 4 分钟读完权重、6 分钟可用；无 DRAM（HMB）的盘在这种读法下会掉到几十 MB/s，要半小时以上。
 
-需要约 290 GB 可用内存（CPU 专家分片约 270 GB + Engram 行缓存 12 GiB）。
+需要约 300 GB 可用内存（本版 38 层 CPU 专家分片约 285 GB + Engram 行缓存 4 GiB；上一版约 290 GB）。
 
 ## 主要启动参数
 
 ```
---chunked-prefill-size 32768 --max-prefill-tokens 32768 --context-length 1048576 --max-total-tokens 1048576
---mem-fraction-static 0.95 --max-running-requests 4 --moe-runner-backend flashinfer_cutlass --disable-shared-experts-fusion
+--chunked-prefill-size 32768 --max-prefill-tokens 32768 --context-length 524288 --max-total-tokens 524288
+--mem-fraction-static 0.95 --max-running-requests 2 --moe-runner-backend flashinfer_cutlass --disable-shared-experts-fusion
 --cuda-graph-backend-decode full --cuda-graph-backend-prefill disabled
 --speculative-algorithm DSPARK --speculative-dspark-block-size 5 --speculative-num-draft-tokens 6
 --enable-decoder-swa-bounded-replay --enable-deepseek-v4-fp4-indexer
 --reasoning-parser deepseek-v41 --tool-call-parser deepseekv41
-LVLLM_GPU_RESIDENT_MOE_LAYERS=20-23  LVLLM_GPU_RESIDENT_MOE_LAYERS_DSPARK=0-2  SGLANG_RAGGED_VERIFY_MODE=static
+LVLLM_GPU_RESIDENT_MOE_LAYERS=22-23  LVLLM_GPU_RESIDENT_MOE_LAYERS_DSPARK=0-2  DSV41_CACHE_GIB=4
+LKQSTRATA=1  LKQSTRATA_SLOTS=23  LKQSTRATA_PROFILE=lkqmoe/lkqstrata-ds41.json  SGLANG_RAGGED_VERIFY_MODE=static
 LKQMOE_THREADS=112  LKQMOE_DOWN_BF16=1  LKQMOE_DYNAMIC=2  LKQMOE_FP8_CONFIGS=1  LKQMOE_DS41_WO_A_TRITON=1
 LKQMOE_DS41_WO_A_FP8=1  LKQMOE_PREFILL_EXPERT_CHUNK=8  LKQMOE_PREFILL_ROUTE_ACCUM=1  LKQMOE_DS41_SPLIT_ZERO=1
 ```
@@ -105,6 +151,8 @@ LKQMOE_DS41_WO_A_FP8=1  LKQMOE_PREFILL_EXPERT_CHUNK=8  LKQMOE_PREFILL_ROUTE_ACCU
   含 Triton 内核的模块内嵌压缩源码，因为 Triton 编译时要读源码）。许可见 `lkqmoe/LICENSE`：可免费使用、原样再分发。
 - 开源部分（Apache-2.0）：`python/sitecustomize.py`；`python/lkqmoe/gpu/`：`wo_a` 的 Triton 分组 einsum 与 FP8 权重、SM120 拆页暂存修复、
   SM120 上 Triton 块 FP8 GEMM 的调优配置；`tools/shard_prefetch.py`（加载时顺序预读权重）。
+- 0.5.0（2026-10-15）：LKQstrata 热专家池（`pool.pyc`，排名表 `lkqstrata-ds41.json`）——CPU 层的热门专家另放 GPU 槽位，decode 时 GPU
+  与 CPU 并行计算后相加；`LKQSTRATA=0` 时与 0.4.x 的数值路径相同。与 lsglang_glm5.3、lsglang_q3.8fn 是同一份二进制与源码。
 - 精度：CPU 专家默认 BF16 Down（相对误差约 1.5e-3，优于官方参考实现的 FP8 激活）；GPU 预填充对 FP64 参考的误差 1.7e-3。
 - 硬件要求：x86-64 AVX512-BF16（VBMI 更快），4 个 NUMA 节点 × 16 物理核（其他拓扑未验证），CUDA GPU。
 
@@ -113,6 +161,7 @@ LKQMOE_DS41_WO_A_FP8=1  LKQMOE_PREFILL_EXPERT_CHUNK=8  LKQMOE_PREFILL_ROUTE_ACCU
 - `speed_points.py`：任意长度打点测速（本页速度表）；`--exact` 精确输入长度，`--stop-on-fail` 遇到失败点即停。
 - `ds41_3point.py`、`ds41_longctx_test.py`：8.2K / 78.7K / 219.7K 三点测试与长上下文验收。
 - `ds41_accept_bench.py`、`ds41_step_profile.py`、`ds41_interstep.py`：接受长度、单步耗时分解、步间空档分析。
+- `step_chat.py`：贪心解码下按流式块间隔测每步耗时（1 / 2 并发，不受接受长度影响）；`conc_chat.py`：温度 1.0 并发吞吐。
 - `ds41_fp8_tune.py`：SM120 上 Triton 块 FP8 GEMM 调优（生成 `lkqmoe/python/lkqmoe/gpu/fp8_configs/`）。
 
 ## 许可
