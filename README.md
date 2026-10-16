@@ -118,8 +118,9 @@ LKQMOE_DS41_WO_A_FP8=1  LKQMOE_PREFILL_EXPERT_CHUNK=8  LKQMOE_PREFILL_ROUTE_ACCU
   SM120 上 Triton 块 FP8 GEMM 的调优配置；`tools/shard_prefetch.py`（加载时顺序预读权重）。
 - 0.5.0（2026-10-15）：LKQstrata 热专家池（`pool.pyc`，排名表 `lkqstrata-ds41.json`）——CPU 层的热门专家另放 GPU 槽位，decode 时 GPU
   与 CPU 并行计算后相加；`LKQSTRATA=0` 时与 0.4.x 的数值路径相同。与 lsglang_glm5.3、lsglang_q3.8fn 是同一份二进制与源码。
+- 版本 0.5.2（2026-10-16）：CPU 内核按 NUMA 拓扑自动分配——从系统读取每个有 CPU 的 NUMA 节点（本机 NPS2 为 4 个、NPS4 为 8 个），每个节点存每个专家 1/N 的行，线程先用该节点的物理核、再用其 SMT 兄弟线程，不再写死 4 节点 × 16 核。`LKQMOE_MAIN_CPUS=auto` 自动取“允许的 CPU − 专家线程 − 信箱调度线程”，换拓扑或线程数不用手改列表。本机（NPS2）上绑核与 0.5.0 完全相同；三个模型的实权重单层在 64 / 112 线程、默认与生产开关、m = 1…2048 下输出与 0.5.0 逐位相同，速度持平；在本机把每个节点拆成两半模拟 NPS4 的 8 节点布局，输出同样逐位相同。启动日志会打印 `[lkqmoe] N worker nodes ...`。
 - 精度：CPU 专家默认 BF16 Down（相对误差约 1.5e-3，优于官方参考实现的 FP8 激活）；GPU 预填充对 FP64 参考的误差 1.7e-3。
-- 硬件要求：x86-64 AVX512-BF16（VBMI 更快），4 个 NUMA 节点 × 16 物理核（其他拓扑未验证），CUDA GPU。
+- 硬件要求：x86-64 AVX512-BF16（VBMI 更快），NUMA 拓扑自动识别（已验证 NPS2 的 4 节点 × 16 核，NPS4 的 8 节点 × 8 核在本机模拟验证；hidden / intermediate 须是 16 × 节点数的倍数）。启动脚本里的 `LKQMOE_MAIN_CPUS` 列表按本机 NPS2 写好，换到其他拓扑时改成 `auto`（`shard_prefetch.py --cpus` 也用这个变量，改 `auto` 时给它一个显式列表），CUDA GPU。
 
 ## 测试脚本（`bench/`）
 

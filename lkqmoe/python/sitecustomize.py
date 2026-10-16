@@ -1,6 +1,20 @@
 """lkqmoe startup hook for the DeepSeek V4.1 NVFP4 pipeline; everything is enabled by the launcher."""
 import os
-if os.environ.get('LKQMOE_MAIN_CPUS'):
+def _auto_main_cpus():
+    # Every allowed CPU except the expert workers' (same rule as lkqmoe_create, current NUMA
+    # topology) and the mailbox dispatcher's: survives NPS/thread-count changes unedited.
+    import ctypes as C
+    lib=C.CDLL(os.environ['LKQMOE_LIBRARY'])
+    threads=int(os.environ.get('LKQMOE_THREADS') or os.environ.get('LK_THREADS','64'))
+    out=(C.c_int*threads)()
+    if lib.lkqmoe_worker_cpus(threads,out,threads)<0:
+        lib.lkqmoe_last_error.restype=C.c_char_p
+        raise RuntimeError('LKQMOE_MAIN_CPUS=auto: '+lib.lkqmoe_last_error().decode())
+    busy=set(out)|{int(os.environ.get('LKQMOE_PROBE_DISPATCH_CPU','80'))}
+    return os.sched_getaffinity(0)-busy
+if os.environ.get('LKQMOE_MAIN_CPUS')=='auto':
+    os.sched_setaffinity(0,_auto_main_cpus() or os.sched_getaffinity(0))
+elif os.environ.get('LKQMOE_MAIN_CPUS'):
     # Keep Python/scheduler threads off the pinned CPU expert workers; the workers and the
     # mailbox dispatcher set their own affinity.
     cpus=set()
