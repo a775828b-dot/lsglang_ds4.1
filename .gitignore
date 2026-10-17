@@ -3,3 +3,4 @@
 /test-results/
 **/__pycache__/
 *.log
+**/.pytest_cache/

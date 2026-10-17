@@ -80,6 +80,8 @@ requests, GPU-resident DSpark and the compiled lkqmoe 0.5.4 backend.
 
 ## 运行方式
 
+OpenAI消息入口支持 developer 角色：编码前按原顺序映射为模型原生 system，保留指令、文本块和工具字段；聊天、思考模式及已有上下文均兼容。此处理在历史思考内容裁剪之前完成，避免静默丢失应用指令。
+
 目标专家保留紧凑的 MXFP4 权重和 UE8M0 block-32 scale，CPU 与 GPU 热专家池同时计算；
 长预填充按专家分块上传 GPU。共享专家、注意力和索引器在 GPU。
 默认 static 全验证，不构建置信度头；生产启动不采集 STS 样本。
@@ -153,3 +155,7 @@ GPU 适配与预读工具维持原有开源范围；原始核心 Python / C++ �
 框架开源部分为 Apache-2.0；1017 会话编码的 MIT 许可见 third_party。
 FlashInfer、b12x 轮子保留 Apache-2.0 许可。
 lkqmoe 编译包采用 `lkqmoe/LICENSE`，核心源码在私有仓库；本仓库不含模型权重。
+
+### API角色回归
+
+设置 LSGLANG 指向已打补丁的源码目录后，可运行 pytest tests/test_developer_roles.py。现有编码样例和新增角色测试共77项通过；真实网关的developer、系统加developer、多轮流式与Responses四类请求通过，另有一次本机LAN流式请求通过。源代码更新在服务启动时加载，已有进程可以通过网关角色兼容恢复调用。

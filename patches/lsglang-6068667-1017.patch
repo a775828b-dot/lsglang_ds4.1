@@ -14,7 +14,7 @@ index 289e597..3c3728e 100644
      if _is_gfx1250 or not fp8_dot_supported():
          # No fp8 tl.dot on this arch (gfx1250, or CUDA before Ada): upcast the
 diff --git a/python/sglang/srt/entrypoints/openai/encoding_dsv41.py b/python/sglang/srt/entrypoints/openai/encoding_dsv41.py
-index 83d1bce..3c7c357 100644
+index 83d1bce..99e0295 100644
 --- a/python/sglang/srt/entrypoints/openai/encoding_dsv41.py
 +++ b/python/sglang/srt/entrypoints/openai/encoding_dsv41.py
 @@ -1,14 +1,26 @@
@@ -63,7 +63,7 @@ index 83d1bce..3c7c357 100644
  
  # Task special tokens for internal classification tasks
  DS_TASK_SP_TOKENS = {
-@@ -49,18 +61,384 @@ assistant_msg_template: str = "{reasoning}{content}{tool_calls}" + eos_token
+@@ -49,18 +61,392 @@ assistant_msg_template: str = "{reasoning}{content}{tool_calls}" + eos_token
  assistant_msg_wo_eos_template: str = "{reasoning}{content}{tool_calls}"
  thinking_template: str = "{reasoning_content}"
  
@@ -187,6 +187,14 @@ index 83d1bce..3c7c357 100644
 +# ============================================================
 +# Preprocessing
 +# ============================================================
++
++def normalize_message_roles(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
++    """Map OpenAI developer turns to native system turns without changing caller data."""
++    return [
++        dict(message, role="system") if message.get("role") == "developer" else message
++        for message in messages
++    ]
++
 +
 +def merge_tool_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 +    """
@@ -451,7 +459,7 @@ index 83d1bce..3c7c357 100644
  
  REASONING_EFFORT_TEMPLATE = (
      "Reasoning Effort: {budget} "
-@@ -68,13 +446,38 @@ REASONING_EFFORT_TEMPLATE = (
+@@ -68,13 +454,38 @@ REASONING_EFFORT_TEMPLATE = (
  )
  
  REASONING_EFFORT_MAPPINGS: Dict[str, int] = {
@@ -493,7 +501,7 @@ index 83d1bce..3c7c357 100644
  TOOLS_TEMPLATE = """## Tools
  
  You have access to a set of tools to help answer the user's question. You can invoke tools by writing a "<{dsml_token}{tc_block_name}>" block like the following:
-@@ -102,65 +505,6 @@ Otherwise, output directly after {thinking_end_token} with tool calls or final r
+@@ -102,65 +513,6 @@ Otherwise, output directly after {thinking_end_token} with tool calls or final r
  You MUST strictly follow the above defined tool name and parameter schemas to invoke tool calls.
  """
  
@@ -559,7 +567,7 @@ index 83d1bce..3c7c357 100644
  
  def render_tools(tools: List[Dict[str, Union[str, Dict[str, Any]]]]) -> str:
      """Render tool schemas into the V4.1 system prompt format."""
-@@ -177,57 +521,67 @@ def render_tools(tools: List[Dict[str, Union[str, Dict[str, Any]]]]) -> str:
+@@ -177,57 +529,67 @@ def render_tools(tools: List[Dict[str, Union[str, Dict[str, Any]]]]) -> str:
      )
  
  
@@ -591,7 +599,7 @@ index 83d1bce..3c7c357 100644
 +        '{value}</{dsml_token}{tool_parameter_tag_name}>'
 +    )
 +    P_dsml_strs = []
- 
++
 +    arguments = tool_call["arguments"]
 +    if not isinstance(arguments, dict):
 +        # Tolerate JSON strings, including double-encoded ones.
@@ -614,7 +622,7 @@ index 83d1bce..3c7c357 100644
 +            is_str="true" if isinstance(v, str) else "false",
 +            value=v if isinstance(v, str) else to_json(v),
 +        ))
-+
+ 
 +    return "\n".join(P_dsml_strs)
 +
 +
@@ -666,7 +674,7 @@ index 83d1bce..3c7c357 100644
  def render_message(
      index: int,
      messages: List[Dict[str, Any]],
-@@ -235,12 +589,11 @@ def render_message(
+@@ -235,12 +597,11 @@ def render_message(
      drop_thinking: bool = True,
      reasoning_effort: Union[str, int, None] = None,
  ) -> str:
@@ -683,7 +691,7 @@ index 83d1bce..3c7c357 100644
  
      msg = messages[index]
      last_user_idx = find_last_user_index(messages)
-@@ -258,43 +611,22 @@ def render_message(
+@@ -258,43 +619,22 @@ def render_message(
      if tool_calls:
          tool_calls = tool_calls_from_openai_format(tool_calls)
  
@@ -734,7 +742,7 @@ index 83d1bce..3c7c357 100644
  
      elif role == "user":
          prompt += USER_SP_TOKEN
-@@ -325,14 +657,10 @@ def render_message(
+@@ -325,14 +665,10 @@ def render_message(
              prompt += content or ""
  
      elif role == "latest_reminder":
@@ -751,7 +759,7 @@ index 83d1bce..3c7c357 100644
  
      elif role == "assistant":
          thinking_part = ""
-@@ -343,12 +671,12 @@ def render_message(
+@@ -343,12 +679,12 @@ def render_message(
                  tool_call_template.format(
                      dsml_token=dsml_token,
                      tool_call_tag_name=tool_call_tag_name,
@@ -767,7 +775,7 @@ index 83d1bce..3c7c357 100644
                  dsml_token=dsml_token,
                  tool_calls="\n".join(tc_list),
                  tc_block_name=tool_calls_block_name,
-@@ -362,9 +690,7 @@ def render_message(
+@@ -362,9 +698,7 @@ def render_message(
  
          if thinking_mode == "thinking" and not prev_has_task:
              if not drop_thinking or index > last_user_idx:
@@ -778,7 +786,7 @@ index 83d1bce..3c7c357 100644
              else:
                  thinking_part = ""
  
-@@ -384,18 +710,13 @@ def render_message(
+@@ -384,18 +718,13 @@ def render_message(
          raise NotImplementedError(f"Unknown role: {role}")
  
      # Append transition tokens based on what follows
@@ -799,7 +807,7 @@ index 83d1bce..3c7c357 100644
          task_sp_token = DS_TASK_SP_TOKENS[task]
  
          if task != "action":
-@@ -404,17 +725,12 @@ def render_message(
+@@ -404,17 +733,12 @@ def render_message(
          else:
              # Action task: append Assistant + thinking token + action sp token
              prompt += ASSISTANT_SP_TOKEN
@@ -820,7 +828,7 @@ index 83d1bce..3c7c357 100644
          prompt += ASSISTANT_SP_TOKEN
          if not drop_thinking and thinking_mode == "thinking":
              prompt += thinking_start_token
-@@ -426,217 +742,15 @@ def render_message(
+@@ -426,217 +750,15 @@ def render_message(
      return prompt
  
  
@@ -1042,7 +1050,7 @@ index 83d1bce..3c7c357 100644
      last_user_idx = find_last_user_index(messages)
      result = []
      keep_roles = {"user", "system", "tool", "latest_reminder", "direct_search_results"}
-@@ -649,7 +763,6 @@ def _drop_thinking_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, An
+@@ -649,7 +771,6 @@ def _drop_thinking_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, An
              msg = copy.copy(msg)
              msg.pop("reasoning_content", None)
              result.append(msg)
@@ -1050,7 +1058,7 @@ index 83d1bce..3c7c357 100644
  
      return result
  
-@@ -665,13 +778,6 @@ def _encode_messages_text(
+@@ -665,13 +786,6 @@ def _encode_messages_text(
      """Encode preprocessed (text-only) messages into the V4.1 prompt format."""
      context = context if context else []
  
@@ -1064,7 +1072,7 @@ index 83d1bce..3c7c357 100644
      full_messages = context + messages
  
      prompt = bos_token if add_default_bos_token and len(context) == 0 else ""
-@@ -710,15 +816,19 @@ def encode_messages(
+@@ -710,15 +824,22 @@ def encode_messages(
      reasoning_effort: Union[str, int, None] = None,
      return_multi_modal_data: bool = False,
  ) -> Any:
@@ -1080,6 +1088,9 @@ index 83d1bce..3c7c357 100644
 +    true, the result is ``(prompt, media_data)``.
      """
 -    context = context or []
++    messages = normalize_message_roles(messages)
++    context = normalize_message_roles(context or [])
++
 +    # Validate before merging can discard message-level textual fields.
 +    for msg in (context or []) + messages:
 +        _validate_no_image_sp_tokens(msg)
@@ -1091,7 +1102,7 @@ index 83d1bce..3c7c357 100644
      processed_context, _ = process_image_messages(context) if context else ([], [])
      processed_messages, images = process_image_messages(messages)
      prompt = _encode_messages_text(
-@@ -732,3 +842,149 @@ def encode_messages(
+@@ -732,3 +853,149 @@ def encode_messages(
      if return_multi_modal_data:
          return prompt, {"images": images}
      return prompt
@@ -1370,7 +1381,9 @@ index 117d9f3..0476eda 100644
                      hidden_size,
                      intermediate_size_per_partition // 2,
 diff --git a/python/sglang/srt/layers/quantization/fp8_utils.py b/python/sglang/srt/layers/quantization/fp8_utils.py
-index df30113..0301b2d 100755
+old mode 100644
+new mode 100755
+index df30113..0301b2d
 --- a/python/sglang/srt/layers/quantization/fp8_utils.py
 +++ b/python/sglang/srt/layers/quantization/fp8_utils.py
 @@ -1541,6 +1541,8 @@ def flashinfer_mxfp8_blockscaled_linear(

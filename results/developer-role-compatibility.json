@@ -1,0 +1,75 @@
+{
+  "before": {
+    "status": 500,
+    "body": {
+      "object": "error",
+      "message": "Internal server error: Unknown role: developer",
+      "type": "InternalServerError",
+      "param": null,
+      "code": 500
+    }
+  },
+  "after_gateway": [
+    {
+      "case": "leading_developer",
+      "status": 200,
+      "stream": false,
+      "content": "ROLE_OK",
+      "usage": {
+        "prompt_tokens": 270,
+        "total_tokens": 314,
+        "completion_tokens": 44,
+        "prompt_tokens_details": null,
+        "reasoning_tokens": 40
+      },
+      "seconds": 1.682
+    },
+    {
+      "case": "system_and_developer_blocks",
+      "status": 200,
+      "stream": false,
+      "content": "ROLE_OK",
+      "usage": {
+        "prompt_tokens": 276,
+        "total_tokens": 311,
+        "completion_tokens": 35,
+        "prompt_tokens_details": null,
+        "reasoning_tokens": 31
+      },
+      "seconds": 1.479
+    },
+    {
+      "case": "mid_conversation_developer",
+      "status": 200,
+      "stream": true,
+      "content": "ROLE_OK",
+      "usage": {
+        "prompt_tokens": 285,
+        "total_tokens": 290,
+        "completion_tokens": 5,
+        "prompt_tokens_details": null,
+        "reasoning_tokens": 1
+      },
+      "seconds": 1.139
+    },
+    {
+      "case": "responses_developer",
+      "status": 200,
+      "content": "ROLE_OK"
+    }
+  ],
+  "encoder_tests": "77 passed",
+  "model_restarted": false,
+  "activation": "Gateway mapping is active now; the native encoding fix loads on the next model restart.",
+  "after_lan": {
+    "status": 200,
+    "roles": [
+      "developer",
+      "user"
+    ],
+    "developer_content": "text blocks",
+    "tools": true,
+    "stream": true,
+    "content": "LOCAL_ROLE_OK"
+  }
+}

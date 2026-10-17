@@ -28,5 +28,11 @@
     "kernel_release_regression_passed": true,
     "static_and_cap_sts_strict_preflight_passed": true,
     "invalid_mode_and_missing_sts_rejected": true
+  },
+  "api_compatibility": {
+    "developer_role": "mapped to native system before preprocessing; content and order preserved",
+    "encoder_regression_tests_passed": 77,
+    "gateway_integration_cases_passed": 4,
+    "lan_streaming_probe_passed": true
   }
 }
