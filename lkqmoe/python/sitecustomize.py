@@ -12,8 +12,12 @@ def _auto_main_cpus():
         raise RuntimeError('LKQMOE_MAIN_CPUS=auto: '+lib.lkqmoe_last_error().decode())
     busy=set(out)|{int(os.environ.get('LKQMOE_PROBE_DISPATCH_CPU','80'))}
     return os.sched_getaffinity(0)-busy
-if os.environ.get('LKQMOE_MAIN_CPUS')=='auto':
+_lkqmoe_topology_fixed=False
+if os.environ.get('LKQMOE_TP_NODES'):
+    pass  # tensor parallelism: lkqmoe.tp places each rank (nodes, dispatcher, LKQMOE_MAIN_CPUS) once its rank is known
+elif os.environ.get('LKQMOE_MAIN_CPUS')=='auto':
     os.sched_setaffinity(0,_auto_main_cpus() or os.sched_getaffinity(0))
+    _lkqmoe_topology_fixed=True
 elif os.environ.get('LKQMOE_MAIN_CPUS'):
     # Keep Python/scheduler threads off the pinned CPU expert workers; the workers and the
     # mailbox dispatcher set their own affinity.
