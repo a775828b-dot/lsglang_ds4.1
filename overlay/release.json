@@ -1,0 +1,16 @@
+{
+  "release": "deepseek-v4.1-flash-1017",
+  "framework_commit": "6068667581bebd2184f7e4acb46136f44837889a",
+  "model_repository": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  "model_revision": "1bae0e1088993b9b82de08f59de5be5a34e42170",
+  "verify_mode_default": "static",
+  "main_gpu_layers": 0,
+  "lkqstrata_slots": 43,
+  "threads": 112,
+  "batch_tokens": 32768,
+  "context_tokens": 524288,
+  "max_running_requests": 2,
+  "engram_gib": 4,
+  "early_lk_moe": true,
+  "evidence": "../results/"
+}

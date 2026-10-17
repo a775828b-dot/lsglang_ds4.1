@@ -596,10 +596,10 @@ class DSparkWorkerV2(BaseSpecWorker):
         if is_unified_kv_triton():
             repeats = ctx_lens.to(torch.int64)
             state_slot = torch.repeat_interleave(
-                batch.req_pool_indices.to(device=device, dtype=torch.int64), repeats
+                batch.req_pool_indices.to(device=device, dtype=torch.int64), repeats, output_size=int(sum(batch.extend_lens))
             )
             final_pos = torch.repeat_interleave(
-                (draft_seq_lens + ctx_lens - 1).to(torch.int64), repeats
+                (draft_seq_lens + ctx_lens - 1).to(torch.int64), repeats, output_size=int(sum(batch.extend_lens))
             )
         cache_loc = batch.out_cache_loc
         token_indices = logits_output.hidden_states_token_indices

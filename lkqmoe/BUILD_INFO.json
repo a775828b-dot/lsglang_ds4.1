@@ -1,0 +1,12 @@
+{
+  "version": "0.5.4",
+  "source_commit": "9cbeb6c7a8a3bd2fc36ced525004450eb3a1dee5",
+  "source_repository": "https://github.com/a775828b-dot/Lkq_moe",
+  "python_abi": "3.12",
+  "platform": "Linux x86_64",
+  "cpu_backends": [
+    "AVX512-BF16/VBMI",
+    "AVX2/FMA"
+  ],
+  "validation": "../results/kernel-release-validation.json"
+}

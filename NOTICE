@@ -1,0 +1,4 @@
+Framework portions derive from guqiong96/Lsglang at 6068667581bebd2184f7e4acb46136f44837889a (Apache-2.0).
+The 1017 conversation encoding derives from deepseek-ai/DeepSeek-V4.1-Flash-1017, revision 1bae0e1088993b9b82de08f59de5be5a34e42170 (MIT; see third_party license).
+The separately licensed compiled lkqmoe package is inspired by lk_moe from guqiong96, with no lk_moe implementation code included.
+Bundled FlashInfer 0.6.18 and b12x 1.3.0 are Apache-2.0 dependencies; their license texts are preserved in third_party.

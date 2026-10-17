@@ -16,6 +16,10 @@ class EngramLoader(importlib.abc.Loader):
         if module.__name__ == 'sglang.srt.layers.engram':
             from engram_backend import install
             install(module)
+        elif module.__name__ == 'sglang.srt.layers.moe.fused_moe_triton.layer':
+            # 2026-10-18: process CPU FP4 MoE layers while loading, drop their scratch staging
+            from early_lk_moe import install
+            install(module)
         else:
             # V4.1 ratio-1/2 indexers always call the FP4 DeepGEMM kernel.
             # SM120 needs its split-128 planner even when the legacy FP8
@@ -30,8 +34,10 @@ class EngramLoader(importlib.abc.Loader):
 
 class EngramFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
+        early = os.environ.get('DS41_EARLY_LK_MOE') == '1'
         if fullname not in ('sglang.srt.layers.engram',
-                            'sglang.srt.layers.attention.dsv4.metadata'):
+                            'sglang.srt.layers.attention.dsv4.metadata') and not (
+                early and fullname == 'sglang.srt.layers.moe.fused_moe_triton.layer'):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
         if spec is not None:

@@ -1,3 +1,5 @@
-__pycache__/
-run/
+/run/
+/build/
+/test-results/
+**/__pycache__/
 *.log

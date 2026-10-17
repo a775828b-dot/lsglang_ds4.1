@@ -1,0 +1,1514 @@
+diff --git a/python/sglang/kernels/ops/quantization/fp8_kernel.py b/python/sglang/kernels/ops/quantization/fp8_kernel.py
+index 289e597..3c3728e 100644
+--- a/python/sglang/kernels/ops/quantization/fp8_kernel.py
++++ b/python/sglang/kernels/ops/quantization/fp8_kernel.py
+@@ -1933,6 +1933,10 @@ def w8a8_block_fp8_matmul_triton(
+             "num_warps": 4,
+             "num_stages": 3,
+         }
++        # SM120 single-token decode: avoid replicating one row across 64 rows.
++        # Keep tuned configs and other batch sizes on their existing paths.
++        if M == 1 and block_n == block_k == 32 and get_platform().is_sm120:
++            config["BLOCK_SIZE_M"] = 16
+ 
+     if _is_gfx1250 or not fp8_dot_supported():
+         # No fp8 tl.dot on this arch (gfx1250, or CUDA before Ada): upcast the
+diff --git a/python/sglang/srt/entrypoints/openai/encoding_dsv41.py b/python/sglang/srt/entrypoints/openai/encoding_dsv41.py
+index 83d1bce..3c7c357 100644
+--- a/python/sglang/srt/entrypoints/openai/encoding_dsv41.py
++++ b/python/sglang/srt/entrypoints/openai/encoding_dsv41.py
+@@ -1,14 +1,26 @@
+-# Adapted from the DeepSeek-V4.1 release reference implementation.
+-"""Encode DeepSeek-V4.1 chat messages.
+-
+-Supports tool calls, reasoning effort, quick instruction tasks and image content.
+-Mid-conversation system messages trigger the assistant generation header;
+-image records are returned alongside the encoded prompt.
++"""
++DeepSeek-V4.1 Text and Vision Encoding
++
++A fully self-contained implementation for encoding/decoding DeepSeek-V4.1 chat
++messages with tool calling, thinking mode, quick instruction tasks, and image
++content blocks. No dependency on encoding_dsv4.
++
++V4.1 changes relative to V4:
++
++1. DSML tag names: tool calls are wrapped in "<｜DSML｜ calls>" blocks with
++   "<｜DSML｜ invoke>" / "<｜DSML｜ parameter>" tags (leading-space tag names).
++2. Numeric reasoning effort: "Reasoning Effort: {budget} (range 1-100, ...)".
++   Accepts an int in [1, 100] or one of "low"/"high"/"max"
++   (mapped to 50/75/100). Defaults to "high". Only rendered in thinking mode.
++3. Mid-conversation system messages are supported via the "<｜System｜>" token.
++   A mid-conversation system message behaves like a user message for the purpose
++   of appending the assistant generation header.
+ """
+ 
++from typing import Any, Dict, List, Union, Optional, Tuple
+ import copy
+ import json
+-from typing import Any, Dict, List, Optional, Tuple, Union
++import re
+ 
+ # ============================================================
+ # Special Tokens
+@@ -22,10 +34,10 @@ dsml_token: str = "｜DSML｜"
+ 
+ USER_SP_TOKEN = "<｜User｜>"
+ ASSISTANT_SP_TOKEN = "<｜Assistant｜>"
+-SYSTEM_SP_TOKEN = "<｜System｜>"
+ LATEST_REMINDER_SP_TOKEN = "<｜latest_reminder｜>"
+ 
+ IMAGE_PLACEHOLDER = "<｜deepseek_image｜>"
++IMAGE_TAG_PATTERN = re.compile(r"<image>(.*?)</image>", re.DOTALL)
+ 
+ # Task special tokens for internal classification tasks
+ DS_TASK_SP_TOKENS = {
+@@ -49,18 +61,384 @@ assistant_msg_template: str = "{reasoning}{content}{tool_calls}" + eos_token
+ assistant_msg_wo_eos_template: str = "{reasoning}{content}{tool_calls}"
+ thinking_template: str = "{reasoning_content}"
+ 
+-response_format_template: str = "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n{schema}"
++response_format_template: str = (
++    "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n{schema}"
++)
++
++tool_output_template: str = (
++    "<tool_result>{content}</tool_result>"
++)
++
++# ============================================================
++# Utility Functions
++# ============================================================
++
++def to_json(value: Any) -> str:
++    """Serialize a value to JSON string."""
++    try:
++        return json.dumps(value, ensure_ascii=False)
++    except:
++        return json.dumps(value, ensure_ascii=True)
++
++
++def tools_from_openai_format(tools):
++    """Extract function definitions with namespace-qualified names."""
++    functions = []
++    for tool in tools:
++        function = dict(tool["function"])
++        if tool.get("namespace") is not None:
++            function["namespace"] = tool["namespace"]
++        function["name"] = _tool_name_for_encoding(function)
++        namespace = function.pop("namespace", None)
++        if isinstance(namespace, dict) and namespace.get("description"):
++            function["description"] = (
++                namespace["description"] + "\n" + (function.get("description") or "")
++            )
++        functions.append(function)
++    return functions
++
++
++def _split_tool_name(name: str, namespace: Optional[str] = None) -> Tuple[Optional[str], str]:
++    """Split a qualified name and validate any explicit namespace."""
++    prefix, separator, bare_name = name.partition("::")
++    if separator:
++        assert namespace in (None, prefix), (
++            f"Conflicting tool namespaces: {namespace} != {prefix}"
++        )
++        namespace, name = prefix, bare_name
++    assert "::" not in name, f"Tool name must not contain '::': {name}"
++    assert namespace is None or "::" not in namespace, (
++        f"Tool namespace must not contain '::': {namespace}"
++    )
++    return namespace, name
++
++
++def _tool_name_for_encoding(tool: Dict[str, Any]) -> str:
++    namespace = tool.get("namespace")
++    if isinstance(namespace, dict):
++        namespace = namespace["name"]
++    namespace, name = _split_tool_name(tool["name"], namespace)
++    return name if namespace is None else f"{namespace}::{name}"
++
++
++def tool_calls_from_openai_format(tool_calls):
++    """Convert OpenAI-format tool calls to internal format."""
++    calls = []
++    for tool_call in tool_calls:
++        function = tool_call["function"]
++        namespace, name = _split_tool_name(
++            function["name"], tool_call.get("namespace") or function.get("namespace")
++        )
++        call = {"name": name, "arguments": function["arguments"]}
++        if namespace is not None:
++            call["namespace"] = namespace
++        calls.append(call)
++    return calls
++
++
++def tool_calls_to_openai_format(tool_calls):
++    """Convert internal tool calls to OpenAI format."""
++    calls = []
++    for tool_call in tool_calls:
++        call = {
++            "type": "function",
++            "function": {
++                "name": tool_call["name"],
++                "arguments": tool_call["arguments"],
++            }
++        }
++        if tool_call.get("namespace") is not None:
++            call["namespace"] = tool_call["namespace"]
++        calls.append(call)
++    return calls
++
++
++def decode_dsml_to_arguments(tool_name: str, tool_args: Dict[str, Tuple[str, str]]) -> Dict[str, str]:
++    """
++    Decode DSML parameters back to a tool call dict.
++
++    Args:
++        tool_name: Name of the tool.
++        tool_args: Dict mapping param_name -> (value, is_string_flag).
++
++    Returns:
++        Dict with "name", "arguments" (JSON string), and optional "namespace".
++    """
++    def _decode_value(key: str, value: str, string: str):
++        if string == "true":
++            value = to_json(value)
++        return f"{to_json(key)}: {value}"
++
++    tool_args_json = "{" + ", ".join([_decode_value(k, v, string=is_str) for k, (v, is_str) in tool_args.items()]) + "}"
++    namespace, name = _split_tool_name(tool_name)
++    tool_call = dict(name=name, arguments=tool_args_json)
++    if namespace is not None:
++        tool_call["namespace"] = namespace
++    return tool_call
++
++
++# ============================================================
++# Preprocessing
++# ============================================================
++
++def merge_tool_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
++    """
++    Merge tool messages into the preceding user message using content_blocks format.
++
++    DeepSeek-V4.1 does not have a standalone "tool" role; instead, tool results
++    are encoded as <tool_result> blocks within user messages.
++    """
++    merged: List[Dict[str, Any]] = []
++
++    for msg in messages:
++        msg = copy.deepcopy(msg)
++        role = msg.get("role")
++
++        if role == "tool":
++            # Convert tool message to a user message with tool_result block
++            content = msg.get("content", "")
++            if msg.get("content_blocks") and not isinstance(msg.get("content"), str):
++                content = msg["content_blocks"]
++            tool_block = {
++                "type": "tool_result",
++                "tool_use_id": msg.get("tool_call_id", ""),
++                "content": content,
++            }
++            # Merge into previous message if it's already a user (merged tool)
++            if merged and merged[-1].get("role") == "user" and "content_blocks" in merged[-1]:
++                merged[-1]["content_blocks"].append(tool_block)
++            else:
++                merged.append({
++                    "role": "user",
++                    "content_blocks": [tool_block],
++                })
++        elif role == "user":
++            content_blocks = msg.get("content_blocks")
++            if content_blocks is None:
++                content = msg.get("content", "")
++                content_blocks = content if isinstance(content, list) else [{"type": "text", "text": content}]
++            if merged and merged[-1].get("role") == "user" and "content_blocks" in merged[-1] and merged[-1].get("task") is None:
++                merged[-1]["content_blocks"].extend(content_blocks)
++            else:
++                # Preserve structured content and all message-level metadata.
++                new_msg = msg
++                new_msg["content_blocks"] = content_blocks
++                merged.append(new_msg)
++        else:
++            merged.append(msg)
++
++    return merged
++
++
++def sort_tool_results_by_call_order(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
++    """
++    Sort tool_result blocks within user messages by the order of tool_calls
++    in the preceding assistant message.
++    """
++    last_tool_call_order: Dict[str, int] = {}
++
++    for msg in messages:
++        role = msg.get("role")
++        if role == "assistant" and msg.get("tool_calls"):
++            last_tool_call_order = {}
++            for idx, tc in enumerate(msg["tool_calls"]):
++                tc_id = tc.get("id") or tc.get("function", {}).get("id", "")
++                if tc_id:
++                    last_tool_call_order[tc_id] = idx
++
++        elif role == "user" and msg.get("content_blocks"):
++            tool_blocks = [b for b in msg["content_blocks"] if b.get("type") == "tool_result"]
++            if len(tool_blocks) > 1 and last_tool_call_order:
++                sorted_blocks = sorted(
++                    tool_blocks,
++                    key=lambda b: last_tool_call_order.get(b.get("tool_use_id", ""), 0)
++                )
++                sorted_idx = 0
++                new_blocks = []
++                for block in msg["content_blocks"]:
++                    if block.get("type") == "tool_result":
++                        new_blocks.append(sorted_blocks[sorted_idx])
++                        sorted_idx += 1
++                    else:
++                        new_blocks.append(block)
++                msg["content_blocks"] = new_blocks
++
++    return messages
++
++
++# ============================================================
++# Vision Message Preprocessing
++# ============================================================
++
++def parse_tagged_text(text: str) -> Union[str, List[Dict[str, Any]]]:
++    """Convert ``<image>path</image>`` text into standard content blocks."""
++    matches = list(IMAGE_TAG_PATTERN.finditer(text))
++    remaining = IMAGE_TAG_PATTERN.sub("", text)
++    if "<image>" in remaining or "</image>" in remaining:
++        raise ValueError("Malformed <image>path</image> tag")
++    if not matches:
++        return text
++
++    blocks: List[Dict[str, Any]] = []
++    cursor = 0
++    for match in matches:
++        if match.start() > cursor:
++            blocks.append({"type": "text", "text": text[cursor:match.start()]})
++        path = match.group(1)
++        if not path:
++            raise ValueError("Image path must not be empty")
++        blocks.append({
++            "type": "image_url",
++            "image_url": {"url": path},
++        })
++        cursor = match.end()
++    if cursor < len(text):
++        blocks.append({"type": "text", "text": text[cursor:]})
++    return blocks
++
++
++def _is_image_block(block: Dict[str, Any]) -> bool:
++    """Return whether a content block is an OpenAI/Anthropic/internal image."""
++    return isinstance(block, dict) and block.get("type") in ("image", "image_url")
++
++
++def _extract_image(block: Dict[str, Any]) -> Dict[str, Any]:
++    """Normalize a supported image block into an internal image record."""
++    record: Dict[str, Any] = {"type": "image"}
++    if block.get("type") == "image_url":
++        image_url = block.get("image_url")
++        if isinstance(image_url, str):
++            record["url"] = image_url
++        else:
++            record["url"] = (image_url or {}).get("url", "")
++    else:
++        for key in ("source", "url", "data"):
++            if key in block:
++                record[key] = block[key]
++    if not any(record.get(key) for key in ("source", "url", "data")):
++        raise ValueError("Image block does not contain a valid source")
++    return record
++
++
++def _process_image_blocks(
++    blocks: List[Any], image_placeholder: str = IMAGE_PLACEHOLDER
++) -> Tuple[List[Any], List[Dict[str, Any]]]:
++    """Replace image blocks and collect their records in one ordered traversal."""
++    new_blocks: List[Any] = []
++    images: List[Dict[str, Any]] = []
++    for block in blocks:
++        if not isinstance(block, dict):
++            new_blocks.append(block)
++            continue
++        if _is_image_block(block):
++            new_blocks.append({"type": "text", "text": image_placeholder})
++            images.append(_extract_image(block))
++        elif block.get("type") == "tool_result" and isinstance(block.get("content"), list):
++            block = copy.copy(block)
++            block["content"], nested_images = _process_image_blocks(
++                block["content"], image_placeholder)
++            new_blocks.append(block)
++            images.extend(nested_images)
++        elif block.get("type") == "text":
++            text = block.get("text") or ""
++            if IMAGE_PLACEHOLDER in text:
++                raise ValueError(
++                    f"Text block contains image placeholder '{IMAGE_PLACEHOLDER}': "
++                    f"'{text[:100]}'. Images should be separate content blocks."
++                )
++            new_blocks.append(block)
++        else:
++            new_blocks.append(block)
++    return new_blocks, images
++
++
++def _validate_no_image_sp_tokens(msg: Dict[str, Any]) -> None:
++    """Reject user-supplied image placeholder tokens in textual fields."""
++    content = msg.get("content")
++    if isinstance(content, str) and IMAGE_PLACEHOLDER in content:
++        raise ValueError(
++            f"Message content contains image special token '{IMAGE_PLACEHOLDER}'. "
++            "Images should be provided as image content blocks."
++        )
++    reasoning_content = msg.get("reasoning_content")
++    if isinstance(reasoning_content, str) and IMAGE_PLACEHOLDER in reasoning_content:
++        raise ValueError(
++            f"reasoning_content contains image special token '{IMAGE_PLACEHOLDER}'"
++        )
++
++
++def process_image_messages(
++    messages: List[Dict[str, Any]],
++) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
++    """Normalize image blocks and return their records in prompt order."""
++    processed: List[Dict[str, Any]] = []
++    images: List[Dict[str, Any]] = []
++    for msg in messages:
++        msg = copy.deepcopy(msg)
++        _validate_no_image_sp_tokens(msg)
++
++        if isinstance(msg.get("content"), list) and "content_blocks" not in msg:
++            msg["content_blocks"] = msg.pop("content")
++
++        if msg.get("content_blocks"):
++            msg["content_blocks"], message_images = _process_image_blocks(
++                msg["content_blocks"])
++            images.extend(message_images)
++            if not isinstance(msg.get("content"), str):
++                texts = [
++                    block.get("text", "")
++                    for block in msg["content_blocks"]
++                    if isinstance(block, dict) and block.get("type") == "text"
++                ]
++                msg["content"] = "\n\n".join(texts)
++
++        processed.append(msg)
++    return processed, images
++
++
++def _read_until_stop(index: int, text: str, stop: List[str]) -> Tuple[int, str, Optional[str]]:
++    """
++    Read text from index until one of the stop strings is found.
++
++    Returns:
++        Tuple of (new_index, content_before_stop, matched_stop_string_or_None).
++    """
++    min_pos = len(text)
++    matched_stop = None
++
++    for s in stop:
++        pos = text.find(s, index)
++        if pos != -1 and pos < min_pos:
++            min_pos = pos
++            matched_stop = s
++
++    if matched_stop:
++        content = text[index:min_pos]
++        return min_pos + len(matched_stop), content, matched_stop
++    else:
++        content = text[index:]
++        return len(text), content, None
++
++# ============================================================
++# V4.1 Special Tokens and DSML Tag Names
++# ============================================================
++
++SYSTEM_SP_TOKEN = "<｜System｜>"
+ 
+ tool_calls_block_name: str = " calls"
+ tool_call_tag_name: str = " invoke"
+ tool_parameter_tag_name: str = " parameter"
+ 
+-tool_call_template: str = '<{dsml_token}{tool_call_tag_name} name="{name}">\n{arguments}\n</{dsml_token}{tool_call_tag_name}>'
++tool_call_template: str = (
++    "<{dsml_token}{tool_call_tag_name} name=\"{name}\">\n{arguments}\n</{dsml_token}{tool_call_tag_name}>"
++)
+ tool_calls_template = (
+     "<{dsml_token}{tc_block_name}>\n{tool_calls}\n</{dsml_token}{tc_block_name}>"
+ )
+ 
+-tool_output_template: str = "<tool_result>{content}</tool_result>"
++# ============================================================
++# Reasoning Effort (numeric budget)
++# ============================================================
+ 
+ REASONING_EFFORT_TEMPLATE = (
+     "Reasoning Effort: {budget} "
+@@ -68,13 +446,38 @@ REASONING_EFFORT_TEMPLATE = (
+ )
+ 
+ REASONING_EFFORT_MAPPINGS: Dict[str, int] = {
+-    "low": 25,
+-    "high": 50,
+-    "xhigh": 75,
++    "low": 50,
++    "high": 75,
+     "max": 100,
+ }
+ DEFAULT_REASONING_EFFORT = "high"
+ 
++
++def render_reasoning_effort(
++    index: int,
++    thinking_mode: str,
++    effort: Union[str, int, None],
++) -> str:
++    """Render the V4.1 numeric reasoning effort prefix (thinking mode, index 0 only)."""
++    if effort is None:
++        effort = DEFAULT_REASONING_EFFORT
++    assert (
++        type(effort) is int and 1 <= effort <= 100
++    ) or effort in REASONING_EFFORT_MAPPINGS, (
++        "Invalid reasoning effort for deepseek_v41: "
++        f"{effort}, should be int within [1,100] or {list(REASONING_EFFORT_MAPPINGS)}"
++    )
++    if type(effort) is str:
++        effort = REASONING_EFFORT_MAPPINGS[effort]
++    if index == 0 and thinking_mode == "thinking":
++        return REASONING_EFFORT_TEMPLATE.format(budget=effort)
++    return ""
++
++
++# ============================================================
++# Tools rendering
++# ============================================================
++
+ TOOLS_TEMPLATE = """## Tools
+ 
+ You have access to a set of tools to help answer the user's question. You can invoke tools by writing a "<{dsml_token}{tc_block_name}>" block like the following:
+@@ -102,65 +505,6 @@ Otherwise, output directly after {thinking_end_token} with tool calls or final r
+ You MUST strictly follow the above defined tool name and parameter schemas to invoke tool calls.
+ """
+ 
+-# ============================================================
+-# Utility Functions
+-# ============================================================
+-
+-
+-def to_json(value: Any) -> str:
+-    """Serialize a value to JSON string."""
+-    try:
+-        return json.dumps(value, ensure_ascii=False)
+-    except:
+-        return json.dumps(value, ensure_ascii=True)
+-
+-
+-def tools_from_openai_format(tools):
+-    """Extract function definitions from OpenAI-format tool list."""
+-    return [tool["function"] for tool in tools]
+-
+-
+-def tool_calls_from_openai_format(tool_calls):
+-    """Convert OpenAI-format tool calls to internal format."""
+-    return [
+-        {
+-            "name": tool_call["function"]["name"],
+-            "arguments": tool_call["function"]["arguments"],
+-        }
+-        for tool_call in tool_calls
+-    ]
+-
+-
+-def encode_arguments_to_dsml(tool_call: Dict[str, Any]) -> str:
+-    """Encode tool call arguments into V4.1 DSML parameter format."""
+-    p_dsml_template = (
+-        '<{dsml_token}{tool_parameter_tag_name} name="{key}" string="{is_str}">'
+-        "{value}</{dsml_token}{tool_parameter_tag_name}>"
+-    )
+-    P_dsml_strs = []
+-
+-    raw_arguments = tool_call["arguments"]
+-    arguments = (
+-        json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
+-    )
+-    if not isinstance(arguments, dict):
+-        raise ValueError(
+-            "Assistant tool call function.arguments must be a JSON object."
+-        )
+-
+-    for k, v in arguments.items():
+-        P_dsml_strs.append(
+-            p_dsml_template.format(
+-                dsml_token=dsml_token,
+-                tool_parameter_tag_name=tool_parameter_tag_name,
+-                key=k,
+-                is_str="true" if isinstance(v, str) else "false",
+-                value=v if isinstance(v, str) else to_json(v),
+-            )
+-        )
+-
+-    return "\n".join(P_dsml_strs)
+-
+ 
+ def render_tools(tools: List[Dict[str, Union[str, Dict[str, Any]]]]) -> str:
+     """Render tool schemas into the V4.1 system prompt format."""
+@@ -177,57 +521,67 @@ def render_tools(tools: List[Dict[str, Union[str, Dict[str, Any]]]]) -> str:
+     )
+ 
+ 
+-def render_reasoning_effort(
+-    index: int,
+-    thinking_mode: str,
+-    effort: Union[str, int, None],
+-) -> str:
+-    """Render the numeric reasoning effort prefix (thinking mode, index 0 only)."""
+-    if effort is None:
+-        effort = DEFAULT_REASONING_EFFORT
+-    if not (
+-        (type(effort) is int and 1 <= effort <= 100)
+-        or effort in REASONING_EFFORT_MAPPINGS
+-    ):
+-        raise ValueError(
+-            f"Invalid reasoning effort for deepseek_v41: {effort!r}, should be "
+-            f"int within [1,100] or {list(REASONING_EFFORT_MAPPINGS)}"
+-        )
+-    if type(effort) is str:
+-        effort = REASONING_EFFORT_MAPPINGS[effort]
+-    if index == 0 and thinking_mode == "thinking":
+-        return REASONING_EFFORT_TEMPLATE.format(budget=effort)
+-    return ""
++def encode_arguments_to_dsml(tool_call: Dict[str, Any]) -> str:
++    """Encode tool call arguments into V4.1 DSML parameter format."""
++    p_dsml_template = (
++        '<{dsml_token}{tool_parameter_tag_name} name="{key}" string="{is_str}">'
++        '{value}</{dsml_token}{tool_parameter_tag_name}>'
++    )
++    P_dsml_strs = []
+ 
++    arguments = tool_call["arguments"]
++    if not isinstance(arguments, dict):
++        # Tolerate JSON strings, including double-encoded ones.
++        for _ in range(2):
++            if isinstance(arguments, str):
++                try:
++                    arguments = json.loads(arguments)
++                except Exception:
++                    break
++            else:
++                break
++        if not isinstance(arguments, dict):
++            arguments = {"arguments": tool_call["arguments"]}
++
++    for k, v in arguments.items():
++        P_dsml_strs.append(p_dsml_template.format(
++            dsml_token=dsml_token,
++            tool_parameter_tag_name=tool_parameter_tag_name,
++            key=k,
++            is_str="true" if isinstance(v, str) else "false",
++            value=v if isinstance(v, str) else to_json(v),
++        ))
++
++    return "\n".join(P_dsml_strs)
++
++
++# ============================================================
++# Message Rendering
++# ============================================================
+ 
+ def find_last_user_index(messages: List[Dict[str, Any]]) -> int:
+-    """Mid-conversation system messages also count as user messages here;
+-    they trigger the assistant generation header.
++    """
++    Find the index of the last user message.
++
++    V4.1 supports mid-conversation system messages, which count as user
++    messages for the purposes of the assistant generation header.
++    User messages containing only tool results do not start a new turn.
+     """
+     last_user_index = -1
+     for idx in range(len(messages) - 1, -1, -1):
+         role = messages[idx].get("role")
+-        if role in ["user", "developer"] or (role == "system" and idx > 0):
++        if role == "user" or (role == "system" and idx > 0):
++            content_blocks = messages[idx].get("content_blocks")
++            if content_blocks and not any(
++                block.get("type") in ("text", "image", "image_url")
++                for block in content_blocks
++            ):
++                continue
+             last_user_index = idx
+             break
+     return last_user_index
+ 
+ 
+-def attach_task_to_last_user_message(messages: List[Dict[str, Any]], task: str) -> None:
+-    """Set `task` on the most recent user/developer message; raise if none exists."""
+-    idx = find_last_user_index(messages)
+-    if idx == -1:
+-        raise ValueError(
+-            "`task` requires at least one message with role='user' or 'developer'."
+-        )
+-    messages[idx]["task"] = task
+-
+-
+-# ============================================================
+-# Message Rendering
+-# ============================================================
+-
+-
+ def render_message(
+     index: int,
+     messages: List[Dict[str, Any]],
+@@ -235,12 +589,11 @@ def render_message(
+     drop_thinking: bool = True,
+     reasoning_effort: Union[str, int, None] = None,
+ ) -> str:
+-    """Render the message at `index` into its DeepSeek-V4.1 encoded string form."""
++    """
++    Render a single message at the given index into its V4.1 encoded string form.
++    """
+     assert 0 <= index < len(messages)
+-    assert thinking_mode in [
+-        "chat",
+-        "thinking",
+-    ], f"Invalid thinking_mode `{thinking_mode}`"
++    assert thinking_mode in ["chat", "thinking"], f"Invalid thinking_mode `{thinking_mode}`"
+ 
+     msg = messages[index]
+     last_user_idx = find_last_user_index(messages)
+@@ -258,43 +611,22 @@ def render_message(
+     if tool_calls:
+         tool_calls = tool_calls_from_openai_format(tool_calls)
+ 
+-    reasoning_effort_prompt = render_reasoning_effort(
+-        index, thinking_mode, reasoning_effort
+-    )
+-    # The leading system token is emitted whenever there is something to host
+-    # at index 0: a system message or the effort prompt (even before a user).
+-    prompt = (
+-        SYSTEM_SP_TOKEN
+-        if index == 0 and (reasoning_effort_prompt or role == "system")
+-        else ""
+-    )
++    # Reasoning effort prefix (thinking mode, index 0 only)
++    reasoning_effort_prompt = render_reasoning_effort(index, thinking_mode, reasoning_effort)
++    # System token leads the conversation when there is a reasoning effort prompt
++    # or the first message is a system message.
++    prompt = SYSTEM_SP_TOKEN if index == 0 and (reasoning_effort_prompt or role == "system") else ""
+     prompt += reasoning_effort_prompt
+ 
+     if role == "system":
+         if index > 0:
++            # Mid-conversation system message
+             prompt += SYSTEM_SP_TOKEN
+         prompt += system_msg_template.format(content=content or "")
+         if tools:
+             prompt += "\n\n" + render_tools(tools)
+         if response_format:
+-            prompt += "\n\n" + response_format_template.format(
+-                schema=to_json(response_format)
+-            )
+-
+-    elif role == "developer":
+-        assert content, f"Invalid message for role `{role}`: {msg}"
+-
+-        content_developer = USER_SP_TOKEN
+-        content_developer += content
+-
+-        if tools:
+-            content_developer += "\n\n" + render_tools(tools)
+-        if response_format:
+-            content_developer += "\n\n" + response_format_template.format(
+-                schema=to_json(response_format)
+-            )
+-
+-        prompt += user_msg_template.format(content=content_developer)
++            prompt += "\n\n" + response_format_template.format(schema=to_json(response_format))
+ 
+     elif role == "user":
+         prompt += USER_SP_TOKEN
+@@ -325,14 +657,10 @@ def render_message(
+             prompt += content or ""
+ 
+     elif role == "latest_reminder":
+-        prompt += LATEST_REMINDER_SP_TOKEN + latest_reminder_msg_template.format(
+-            content=content
+-        )
++        prompt += LATEST_REMINDER_SP_TOKEN + latest_reminder_msg_template.format(content=content)
+ 
+     elif role == "tool":
+-        raise NotImplementedError(
+-            "deepseek_v41 merges tool messages into user; please preprocess with merge_tool_messages()"
+-        )
++        raise NotImplementedError("deepseek_v41 merges tool messages into user; please preprocess with merge_tool_messages()")
+ 
+     elif role == "assistant":
+         thinking_part = ""
+@@ -343,12 +671,12 @@ def render_message(
+                 tool_call_template.format(
+                     dsml_token=dsml_token,
+                     tool_call_tag_name=tool_call_tag_name,
+-                    name=tc.get("name"),
+-                    arguments=encode_arguments_to_dsml(tc),
++                    name=_tool_name_for_encoding(tc),
++                    arguments=encode_arguments_to_dsml(tc)
+                 )
+                 for tc in tool_calls
+             ]
+-            tc_content += "\n\n" + tool_calls_template.format(
++            tc_content += '\n\n' + tool_calls_template.format(
+                 dsml_token=dsml_token,
+                 tool_calls="\n".join(tc_list),
+                 tc_block_name=tool_calls_block_name,
+@@ -362,9 +690,7 @@ def render_message(
+ 
+         if thinking_mode == "thinking" and not prev_has_task:
+             if not drop_thinking or index > last_user_idx:
+-                thinking_part = (
+-                    thinking_template.format(reasoning_content=rc) + thinking_end_token
+-                )
++                thinking_part = thinking_template.format(reasoning_content=rc) + thinking_end_token
+             else:
+                 thinking_part = ""
+ 
+@@ -384,18 +710,13 @@ def render_message(
+         raise NotImplementedError(f"Unknown role: {role}")
+ 
+     # Append transition tokens based on what follows
+-    if index + 1 < len(messages) and messages[index + 1].get("role") not in [
+-        "assistant",
+-        "latest_reminder",
+-    ]:
++    if index + 1 < len(messages) and messages[index + 1].get("role") not in ["assistant", "latest_reminder"]:
+         return prompt
+ 
+     task = messages[index].get("task")
+     if task is not None:
+         # Task special token for internal classification tasks
+-        assert task in VALID_TASKS, (
+-            f"Invalid task: '{task}'. Valid tasks are: {list(VALID_TASKS)}"
+-        )
++        assert task in VALID_TASKS, f"Invalid task: '{task}'. Valid tasks are: {list(VALID_TASKS)}"
+         task_sp_token = DS_TASK_SP_TOKENS[task]
+ 
+         if task != "action":
+@@ -404,17 +725,12 @@ def render_message(
+         else:
+             # Action task: append Assistant + thinking token + action sp token
+             prompt += ASSISTANT_SP_TOKEN
+-            prompt += (
+-                thinking_end_token
+-                if thinking_mode != "thinking"
+-                else thinking_start_token
+-            )
++            prompt += thinking_end_token if thinking_mode != "thinking" else thinking_start_token
+             prompt += task_sp_token
+ 
+-    elif messages[index].get("role") in ["user", "developer"] or (
+-        messages[index].get("role") == "system" and index > 0
+-    ):
++    elif role == "user" or (role == "system" and index > 0):
+         # Normal generation: append Assistant + thinking token
++        # (mid-conversation system messages also trigger the assistant header)
+         prompt += ASSISTANT_SP_TOKEN
+         if not drop_thinking and thinking_mode == "thinking":
+             prompt += thinking_start_token
+@@ -426,217 +742,15 @@ def render_message(
+     return prompt
+ 
+ 
+-# ============================================================
+-# Preprocessing
+-# ============================================================
+-
+-
+-def merge_tool_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+-    """Tool results are encoded within user messages;
+-    DeepSeek-V4.1 has no standalone tool role.
+-    """
+-    merged: List[Dict[str, Any]] = []
+-
+-    for msg in messages:
+-        msg = copy.deepcopy(msg)
+-        role = msg.get("role")
+-
+-        if role == "tool":
+-            # Convert tool message to a user message with tool_result block
+-            tool_block = {
+-                "type": "tool_result",
+-                "tool_use_id": msg.get("tool_call_id", ""),
+-                "content": msg.get("content", ""),
+-            }
+-            # Merge into previous message if it's already a user (merged tool)
+-            if (
+-                merged
+-                and merged[-1].get("role") == "user"
+-                and "content_blocks" in merged[-1]
+-            ):
+-                merged[-1]["content_blocks"].append(tool_block)
+-            else:
+-                merged.append(
+-                    {
+-                        "role": "user",
+-                        "content_blocks": [tool_block],
+-                    }
+-                )
+-        elif role == "user":
+-            content_blocks = msg.get("content_blocks")
+-            if content_blocks is None:
+-                content_blocks = [{"type": "text", "text": msg.get("content", "")}]
+-            if (
+-                merged
+-                and merged[-1].get("role") == "user"
+-                and "content_blocks" in merged[-1]
+-                and merged[-1].get("task") is None
+-            ):
+-                merged[-1]["content_blocks"].extend(content_blocks)
+-            else:
+-                # Keeps structured content and every message-level field.
+-                new_msg = msg
+-                new_msg["content_blocks"] = content_blocks
+-                merged.append(new_msg)
+-        else:
+-            merged.append(msg)
+-
+-    return merged
+-
+-
+-def sort_tool_results_by_call_order(
+-    messages: List[Dict[str, Any]],
+-) -> List[Dict[str, Any]]:
+-    """
+-    Sort tool_result blocks within user messages by the order of tool_calls
+-    in the preceding assistant message.
+-    """
+-    last_tool_call_order: Dict[str, int] = {}
+-
+-    for msg in messages:
+-        role = msg.get("role")
+-        if role == "assistant" and msg.get("tool_calls"):
+-            last_tool_call_order = {}
+-            for idx, tc in enumerate(msg["tool_calls"]):
+-                tc_id = tc.get("id") or tc.get("function", {}).get("id", "")
+-                if tc_id:
+-                    last_tool_call_order[tc_id] = idx
+-
+-        elif role == "user" and msg.get("content_blocks"):
+-            tool_blocks = [
+-                b for b in msg["content_blocks"] if b.get("type") == "tool_result"
+-            ]
+-            if len(tool_blocks) > 1 and last_tool_call_order:
+-                sorted_blocks = sorted(
+-                    tool_blocks,
+-                    key=lambda b: last_tool_call_order.get(b.get("tool_use_id", ""), 0),
+-                )
+-                sorted_idx = 0
+-                new_blocks = []
+-                for block in msg["content_blocks"]:
+-                    if block.get("type") == "tool_result":
+-                        new_blocks.append(sorted_blocks[sorted_idx])
+-                        sorted_idx += 1
+-                    else:
+-                        new_blocks.append(block)
+-                msg["content_blocks"] = new_blocks
+-
+-    return messages
+-
+-
+-# ============================================================
+-# Vision Message Preprocessing
+-# ============================================================
+-
+-
+-def _is_image_block(block: Dict[str, Any]) -> bool:
+-    return isinstance(block, dict) and block.get("type") in ("image", "image_url")
+-
+-
+-def _extract_image(block: Dict[str, Any]) -> Dict[str, Any]:
+-    """Normalize a supported image block into an internal image record."""
+-    record: Dict[str, Any] = {"type": "image"}
+-    if block.get("type") == "image_url":
+-        image_url = block.get("image_url")
+-        if isinstance(image_url, str):
+-            record["url"] = image_url
+-        else:
+-            record["url"] = (image_url or {}).get("url", "")
+-    else:
+-        for key in ("source", "url", "data"):
+-            if key in block:
+-                record[key] = block[key]
+-    if not any(record.get(key) for key in ("source", "url", "data")):
+-        raise ValueError("Image block does not contain a valid source")
+-    return record
+-
+-
+-def _process_image_blocks(
+-    blocks: List[Any], image_placeholder: str = IMAGE_PLACEHOLDER
+-) -> Tuple[List[Any], List[Dict[str, Any]]]:
+-    """Replace image blocks with placeholders and collect their records in order."""
+-    new_blocks: List[Any] = []
+-    images: List[Dict[str, Any]] = []
+-    for block in blocks:
+-        if not isinstance(block, dict):
+-            new_blocks.append(block)
+-            continue
+-        if _is_image_block(block):
+-            new_blocks.append({"type": "text", "text": image_placeholder})
+-            images.append(_extract_image(block))
+-        elif block.get("type") == "tool_result" and isinstance(
+-            block.get("content"), list
+-        ):
+-            block = copy.copy(block)
+-            block["content"], nested_images = _process_image_blocks(
+-                block["content"], image_placeholder
+-            )
+-            new_blocks.append(block)
+-            images.extend(nested_images)
+-        elif block.get("type") == "text":
+-            text = block.get("text") or ""
+-            if IMAGE_PLACEHOLDER in text:
+-                raise ValueError(
+-                    f"Text block contains image placeholder '{IMAGE_PLACEHOLDER}': "
+-                    f"'{text[:100]}'. Images should be separate content blocks."
+-                )
+-            new_blocks.append(block)
+-        else:
+-            new_blocks.append(block)
+-    return new_blocks, images
+-
+-
+-def _validate_no_image_sp_tokens(msg: Dict[str, Any]) -> None:
+-    """Reject user-supplied image placeholder tokens in textual fields."""
+-    content = msg.get("content")
+-    if isinstance(content, str) and IMAGE_PLACEHOLDER in content:
+-        raise ValueError(
+-            f"Message content contains image special token '{IMAGE_PLACEHOLDER}'. "
+-            "Images should be provided as image content blocks."
+-        )
+-    reasoning_content = msg.get("reasoning_content")
+-    if isinstance(reasoning_content, str) and IMAGE_PLACEHOLDER in reasoning_content:
+-        raise ValueError(
+-            f"reasoning_content contains image special token '{IMAGE_PLACEHOLDER}'"
+-        )
+-
+-
+-def process_image_messages(
+-    messages: List[Dict[str, Any]],
+-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+-    """Normalize image blocks and return their records in prompt order."""
+-    processed: List[Dict[str, Any]] = []
+-    images: List[Dict[str, Any]] = []
+-    for msg in messages:
+-        msg = copy.deepcopy(msg)
+-        _validate_no_image_sp_tokens(msg)
+-
+-        if isinstance(msg.get("content"), list) and "content_blocks" not in msg:
+-            msg["content_blocks"] = msg.pop("content")
+-
+-        if msg.get("content_blocks"):
+-            msg["content_blocks"], message_images = _process_image_blocks(
+-                msg["content_blocks"]
+-            )
+-            images.extend(message_images)
+-            if not isinstance(msg.get("content"), str):
+-                texts = [
+-                    block.get("text", "")
+-                    for block in msg["content_blocks"]
+-                    if isinstance(block, dict) and block.get("type") == "text"
+-                ]
+-                msg["content"] = "\n\n".join(texts)
+-
+-        processed.append(msg)
+-    return processed, images
+-
+-
+ # ============================================================
+ # Main Encoding Function
+ # ============================================================
+ 
+-
+ def _drop_thinking_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
++    """
++    Drop reasoning_content and non-essential messages before the last user message.
++    Same as V4, but uses the V4.1 last-user definition (mid systems count).
++    """
+     last_user_idx = find_last_user_index(messages)
+     result = []
+     keep_roles = {"user", "system", "tool", "latest_reminder", "direct_search_results"}
+@@ -649,7 +763,6 @@ def _drop_thinking_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, An
+             msg = copy.copy(msg)
+             msg.pop("reasoning_content", None)
+             result.append(msg)
+-        # developer and other roles before last_user_idx are dropped
+ 
+     return result
+ 
+@@ -665,13 +778,6 @@ def _encode_messages_text(
+     """Encode preprocessed (text-only) messages into the V4.1 prompt format."""
+     context = context if context else []
+ 
+-    # Preprocess: merge tool messages and sort tool results
+-    messages = merge_tool_messages(messages)
+-    messages = sort_tool_results_by_call_order(context + messages)[len(context) :]
+-    if context:
+-        context = merge_tool_messages(context)
+-        context = sort_tool_results_by_call_order(context)
+-
+     full_messages = context + messages
+ 
+     prompt = bos_token if add_default_bos_token and len(context) == 0 else ""
+@@ -710,15 +816,19 @@ def encode_messages(
+     reasoning_effort: Union[str, int, None] = None,
+     return_multi_modal_data: bool = False,
+ ) -> Any:
+-    """
+-    Encode a list of messages into the DeepSeek-V4.1 prompt format.
++    """Encode text or multimodal messages into the DeepSeek-V4.1 prompt format.
+ 
+-    Handles BOS insertion, thinking mode with optional reasoning dropping, tool
+-    message merging, multi-turn context, and image content blocks. Returns the
+-    prompt string, or ``(prompt, {"images": [...]})`` when
+-    ``return_multi_modal_data`` is set; the image records are in prompt order.
++    Text-only calls return the prompt string. When return_multi_modal_data is
++    true, the result is ``(prompt, media_data)``.
+     """
+-    context = context or []
++    # Validate before merging can discard message-level textual fields.
++    for msg in (context or []) + messages:
++        _validate_no_image_sp_tokens(msg)
++
++    # Collect images only after tool results are in their final prompt order.
++    context = merge_tool_messages(context or [])
++    messages = merge_tool_messages(messages)
++    messages = sort_tool_results_by_call_order(context + messages)[len(context):]
+     processed_context, _ = process_image_messages(context) if context else ([], [])
+     processed_messages, images = process_image_messages(messages)
+     prompt = _encode_messages_text(
+@@ -732,3 +842,149 @@ def encode_messages(
+     if return_multi_modal_data:
+         return prompt, {"images": images}
+     return prompt
++
++
++def load_cases(input_file: str) -> List[Dict[str, Any]]:
++    """Load one or more OpenAI-format conversation cases from JSON."""
++    with open(input_file) as file:
++        data = json.load(file)
++    if isinstance(data, dict):
++        data = [data]
++    elif data and isinstance(data[0], dict) and "role" in data[0]:
++        data = [{"messages": data}]
++
++    cases = []
++    for case in data:
++        messages = copy.deepcopy(case["messages"])
++        if "tools" in case:
++            if not messages:
++                raise ValueError("A case with tools must contain at least one message")
++            messages[0]["tools"] = case["tools"]
++        cases.append({
++            "messages": messages,
++            "context": case.get("context"),
++            "thinking_mode": case.get("thinking_mode"),
++            "reasoning_effort": case.get("reasoning_effort"),
++        })
++    return cases
++
++
++def encode_case(
++    case: Dict[str, Any], thinking_mode: str
++) -> Tuple[str, List[Dict[str, Any]]]:
++    """Encode one JSON case and return its current-turn image records."""
++    prompt, media_data = encode_messages(
++        case["messages"],
++        thinking_mode=case.get("thinking_mode") or thinking_mode,
++        context=case.get("context"),
++        reasoning_effort=case.get("reasoning_effort"),
++        return_multi_modal_data=True,
++    )
++    return prompt, media_data["images"]
++
++
++# ============================================================
++# Parsing (Decoding model output)
++# ============================================================
++
++def parse_tool_calls(index: int, text: str) -> Tuple[int, Optional[str], List[Dict[str, str]]]:
++    """
++    Parse V4.1 DSML tool calls from text starting at the given index.
++
++    Returns:
++        Tuple of (new_index, last_stop_token, list_of_tool_call_dicts).
++    """
++    tool_calls: List[Dict[str, Any]] = []
++    stop_token = None
++    tool_calls_end_token = f"</{dsml_token}{tool_calls_block_name}>"
++    tool_call_start_token = f"<{dsml_token}{tool_call_tag_name}"
++    tool_call_end_token = f"</{dsml_token}{tool_call_tag_name}"
++    tool_parameter_start_token = f"<{dsml_token}{tool_parameter_tag_name}"
++    tool_parameter_end_token = f"/{dsml_token}{tool_parameter_tag_name}"
++
++    while index < len(text):
++        index, _, stop_token = _read_until_stop(index, text, [tool_call_start_token, tool_calls_end_token])
++        if _ != ">\n":
++            raise ValueError(f"Tool call format error: expected '>\\n' but got '{_}'")
++
++        if stop_token == tool_calls_end_token:
++            break
++
++        if stop_token is None:
++            raise ValueError("Missing special token in tool calls")
++
++        index, tool_name_content, stop_token = _read_until_stop(index, text, [tool_parameter_start_token, tool_call_end_token])
++
++        p_tool_name = re.findall(r'^\s*name="(.*?)">\n$', tool_name_content, flags=re.DOTALL)
++        if len(p_tool_name) != 1:
++            raise ValueError(f"Tool name format error: '{tool_name_content}'")
++        tool_name = p_tool_name[0]
++
++        tool_args: Dict[str, Tuple[str, str]] = {}
++        while stop_token == tool_parameter_start_token:
++            index, param_content, stop_token = _read_until_stop(index, text, [tool_parameter_end_token])
++
++            param_kv = re.findall(r'^ name="(.*?)" string="(true|false)">(.*?)<$', param_content, flags=re.DOTALL)
++            if len(param_kv) != 1:
++                raise ValueError(f"Parameter format error: '{param_content}'")
++            param_name, string, param_value = param_kv[0]
++
++            if param_name in tool_args:
++                raise ValueError(f"Duplicate parameter name: '{param_name}'")
++            tool_args[param_name] = (param_value, string)
++
++            index, content, stop_token = _read_until_stop(index, text, [tool_parameter_start_token, tool_call_end_token])
++            if content != ">\n":
++                raise ValueError(f"Parameter format error: expected '>\\n' but got '{content}'")
++
++        tool_call = decode_dsml_to_arguments(tool_name=tool_name, tool_args=tool_args)
++        tool_calls.append(tool_call)
++
++    return index, stop_token, tool_calls
++
++
++def parse_message_from_completion_text(text: str, thinking_mode: str) -> Dict[str, Any]:
++    """
++    Parse a model completion text into a structured assistant message (V4.1 format).
++
++    Returns:
++        Dict with keys: "role", "content", "reasoning_content", "tool_calls".
++        tool_calls are in OpenAI format.
++    """
++    summary_content, reasoning_content, tool_calls = "", "", []
++    index, stop_token = 0, None
++    tool_calls_start_token = f"\n\n<{dsml_token}{tool_calls_block_name}"
++
++    is_thinking = thinking_mode == "thinking"
++    is_tool_calling = False
++
++    if is_thinking:
++        index, content_delta, stop_token = _read_until_stop(index, text, [thinking_end_token, tool_calls_start_token])
++        reasoning_content = content_delta
++        assert stop_token == thinking_end_token, "Invalid thinking format: missing </think>"
++
++    index, content_delta, stop_token = _read_until_stop(index, text, [eos_token, tool_calls_start_token])
++    summary_content = content_delta
++    if stop_token == tool_calls_start_token:
++        is_tool_calling = True
++    else:
++        assert stop_token == eos_token, "Invalid format: missing EOS token"
++
++    if is_tool_calling:
++        index, stop_token, tool_calls = parse_tool_calls(index, text)
++
++        index, tool_ends_text, stop_token = _read_until_stop(index, text, [eos_token])
++        assert not tool_ends_text, "Unexpected content after tool calls"
++
++    assert len(text) == index and stop_token in [eos_token, None], "Unexpected content at end"
++
++    for sp_token in [bos_token, eos_token, thinking_start_token, thinking_end_token, dsml_token]:
++        assert sp_token not in summary_content and sp_token not in reasoning_content, \
++            f"Unexpected special token '{sp_token}' in content"
++
++    return {
++        "role": "assistant",
++        "content": summary_content,
++        "reasoning_content": reasoning_content,
++        "tool_calls": tool_calls_to_openai_format(tool_calls)
++    }
+diff --git a/python/sglang/srt/layers/attention/deepseek_v4_backend.py b/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+index 2c869db..b1de54e 100644
+--- a/python/sglang/srt/layers/attention/deepseek_v4_backend.py
++++ b/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+@@ -338,7 +338,7 @@ def two_level_decode_logits(
+ 
+ 
+ # Arbitrary cap on one bf16 [rows, heads, lc] score chunk; transients run ~3x this.
+-_TORCH_INDEXER_SCORE_BUDGET_BYTES = 1 << 30
++_TORCH_INDEXER_SCORE_BUDGET_BYTES = 128 << 20
+ 
+ 
+ def _mask_topk_scores(
+diff --git a/python/sglang/srt/layers/engram.py b/python/sglang/srt/layers/engram.py
+index 8f4340f..e359a97 100644
+--- a/python/sglang/srt/layers/engram.py
++++ b/python/sglang/srt/layers/engram.py
+@@ -305,7 +305,7 @@ class EngramHasher(nn.Module):
+             )
+             lens = forward_batch.extend_seq_lens.to(torch.int64)
+             starts = forward_batch.extend_start_loc.to(torch.int64)
+-            row = torch.repeat_interleave(torch.arange(bs, device=device), lens)
++            row = torch.repeat_interleave(torch.arange(bs, device=device), lens, output_size=int(sum(forward_batch.extend_seq_lens_cpu)))
+             num_real = row.shape[0]
+             kmode = MODE_EXTEND
+             if forward_batch.ngram_history is not None:
+diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
+index 6d59cf4..1041e3a 100644
+--- a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
++++ b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
+@@ -1962,6 +1962,9 @@ class FusedMoE(torch.nn.Module):
+             logger.error(f"Failed to initialize lk_moe: {e}") 
+             self.lk_moe = None
+             self.lk_moe_config = None 
++            raise RuntimeError(
++                f"lk_moe initialization failed for layer {self.layer_id}; stopping load"
++            ) from e
+     def clean_weights_after_loading(self): 
+         if self.is_gpu_resident_layer:
+             return
+diff --git a/python/sglang/srt/layers/quantization/fp8.py b/python/sglang/srt/layers/quantization/fp8.py
+index 117d9f3..0476eda 100644
+--- a/python/sglang/srt/layers/quantization/fp8.py
++++ b/python/sglang/srt/layers/quantization/fp8.py
+@@ -351,7 +351,7 @@ class Fp8Config(QuantizationConfig):
+                     weight_block_size,
+                 )
+             weight_block_size = [1, 32]
+-        return cls(
++        result = cls(
+             is_checkpoint_fp8_serialized=is_checkpoint_fp8_serialized,
+             activation_scheme=activation_scheme,
+             ignored_layers=ignored_layers,
+@@ -362,6 +362,9 @@ class Fp8Config(QuantizationConfig):
+             scale_fmt=scale_fmt,
+         )
+ 
++        result.dsv41_nvfp4_experts = config.get("moe_quant_algo", "").upper() == "NVFP4"
++        return result
++
+     def get_quant_method(
+         self, layer: torch.nn.Module, prefix: str
+     ) -> Optional[QuantizeMethodBase]:
+@@ -396,6 +399,14 @@ class Fp8Config(QuantizationConfig):
+ 
+                 return NPUMXFP8OnlineMoEMethod(self)
+ 
++            if getattr(self, "dsv41_nvfp4_experts", False):
++                from sglang.srt.layers.quantization.modelopt_quant import (
++                    ModelOptFp4Config, ModelOptNvFp4FusedMoEMethod,
++                )
++                return ModelOptNvFp4FusedMoEMethod(ModelOptFp4Config(
++                    is_checkpoint_nvfp4_serialized=True, group_size=16,
++                    use_per_token_activation=False,
++                ))
+             fp8_method = Fp8MoEMethod(self)
+ 
+             if self.is_fp4_experts and self.dequant_fp4_to_fp8:
+@@ -418,7 +429,7 @@ class Fp8Config(QuantizationConfig):
+ 
+                 return Mxfp4HummingMoEMethod(fp8_method, prefix=prefix)
+ 
+-            if self.is_fp4_experts and get_moe_runner_backend().is_flashinfer_mxfp4():
++            if self.is_fp4_experts and (get_moe_runner_backend().is_flashinfer_mxfp4() or get_moe_runner_backend().is_flashinfer_cutlass()):
+                 from sglang.srt.utils.common import is_sm80_supported
+ 
+                 # SM80/86/89 have no FlashInfer FP4 kernels at all (the FP4
+@@ -1078,6 +1089,7 @@ class Fp8LinearMethod(LinearMethodBase):
+             self.block_fp8_as_mxfp8
+             and getattr(layer, "block_fp8_mxfp8_ready", False)
+             and not isinstance(x, tuple)
++            and x.numel() == x.shape[-1]
+         ):
+             backend = self.mxfp8_dense_backend
+             extra_kwargs = {}
+@@ -1169,6 +1181,14 @@ class Fp8LinearMethod(LinearMethodBase):
+         )
+ 
+ 
++def _allocate_fp4_moe_weight(*shape, dtype, device):
++    import os
++    if device == "cpu" and os.environ.get("SGLANG_LK_MOE_NVME_STAGING") == "1":
++        from sglang.srt.utils.lk_moe_nvme_alloc import nvme_backed_empty
++        return nvme_backed_empty(*shape, dtype=dtype)
++    return torch.empty(*shape, dtype=dtype, device=device)
++
++
+ class Fp8MoEMethod(FusedMoEMethodBase):
+     """MoE method for FP8.
+     Supports loading FP8 checkpoints with static weight scale and
+@@ -1298,7 +1318,7 @@ class Fp8MoEMethod(FusedMoEMethodBase):
+         # WEIGHTS
+         if is_fp4_expert:
+             w13_weight = torch.nn.Parameter(
+-                torch.empty(
++                _allocate_fp4_moe_weight(
+                     num_experts,
+                     w13_num_shards * intermediate_size_per_partition,
+                     hidden_size // 2,
+@@ -1308,7 +1328,7 @@ class Fp8MoEMethod(FusedMoEMethodBase):
+                 requires_grad=False,
+             )
+             w2_weight = torch.nn.Parameter(
+-                torch.empty(
++                _allocate_fp4_moe_weight(
+                     num_experts,
+                     hidden_size,
+                     intermediate_size_per_partition // 2,
+diff --git a/python/sglang/srt/layers/quantization/fp8_utils.py b/python/sglang/srt/layers/quantization/fp8_utils.py
+index df30113..0301b2d 100755
+--- a/python/sglang/srt/layers/quantization/fp8_utils.py
++++ b/python/sglang/srt/layers/quantization/fp8_utils.py
+@@ -1541,6 +1541,8 @@ def flashinfer_mxfp8_blockscaled_linear(
+     pin_tactic skips autotuning and uses the backend heuristic to preserve row-wise
+     batch invariance; tactics tuned per M bucket can change the fp32 reduction order.
+     """
++    if get_platform().is_sm120 and backend == "cutlass" and input.numel() == input.shape[-1]:
++        backend = "b12x"
+     input_2d = input.view(-1, input.shape[-1])
+     output_shape = [*input.shape[:-1], weight.shape[0]]
+ 
+diff --git a/python/sglang/srt/models/deepseek_v4.py b/python/sglang/srt/models/deepseek_v4.py
+index 3263711..3a405d8 100644
+--- a/python/sglang/srt/models/deepseek_v4.py
++++ b/python/sglang/srt/models/deepseek_v4.py
+@@ -2114,6 +2114,8 @@ class MQALayer(MqaAttentionBase):
+                 )
+ 
+             o = o.view(o.shape[0], self.n_local_groups, -1)
++            from ds1017_quant import quant_dequant
++            o = quant_dequant(o)
+ 
+             if self.wo_a_fp8 and _wo_a_fp8_mxscale is not None:
+                 # ROCm gfx950: same fp8 absorb GEMM as the DeepGEMM path below,
+diff --git a/python/sglang/srt/models/deepseek_v4_dspark.py b/python/sglang/srt/models/deepseek_v4_dspark.py
+index ad8d59e..c660cb8 100644
+--- a/python/sglang/srt/models/deepseek_v4_dspark.py
++++ b/python/sglang/srt/models/deepseek_v4_dspark.py
+@@ -351,6 +351,8 @@ class DSparkAttention(MqaAttentionBase):
+             self.n_local_groups,
+             o.shape[1] * o.shape[2] // self.n_local_groups,
+         )
++        from ds1017_quant import quant_dequant
++        o = quant_dequant(o)
+         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
+         if self._use_fast_kernel:
+             o = torch.einsum("bgd,grd->bgr", o, wo_a)
+diff --git a/python/sglang/srt/utils/lk_moe_nvme_alloc.py b/python/sglang/srt/utils/lk_moe_nvme_alloc.py
+new file mode 100644
+index 0000000..c129055
+--- /dev/null
++++ b/python/sglang/srt/utils/lk_moe_nvme_alloc.py
+@@ -0,0 +1,29 @@
++"""Reclaimable FP4 load staging; LK owns the final CPU-resident weights.
++
++The scratch mapping stores unchanged packed bytes. It is not a quantizer or
++an inference-time expert cache. Deleted scratch files live until mappings close.
++"""
++import math
++import os
++from pathlib import Path
++import tempfile
++import numpy as np
++import torch
++
++def nvme_backed_empty(*shape, dtype):
++    root=Path(os.environ['SGLANG_LK_MOE_NVME_SCRATCH'])
++    root.mkdir(parents=True,exist_ok=True)
++    count=math.prod(shape)
++    if not count:
++        return torch.empty(*shape,dtype=dtype,device='cpu')
++    size=count*torch.empty((),dtype=dtype).element_size()
++    fd,path=tempfile.mkstemp(prefix='fp4-load-',suffix='.bin',dir=root)
++    try:
++        os.ftruncate(fd,size)
++        mapping=np.memmap(path,dtype=np.uint8,mode='r+',shape=(size,))
++    finally:
++        os.close(fd)
++        os.unlink(path)
++    tensor=torch.frombuffer(mapping,dtype=dtype).reshape(shape)
++    tensor._lk_moe_backing=mapping
++    return tensor
+diff --git a/python/sglang/srt/utils/lk_source_lock.py b/python/sglang/srt/utils/lk_source_lock.py
+new file mode 100644
+index 0000000..2553864
+--- /dev/null
++++ b/python/sglang/srt/utils/lk_source_lock.py
+@@ -0,0 +1,63 @@
++"""Keep one CPU layer's source pages resident only during LK construction."""
++from contextlib import contextmanager
++import ctypes
++import json
++from pathlib import Path
++import numpy as np
++
++libc = ctypes.CDLL(None, use_errno=True)
++libnuma = ctypes.CDLL('libnuma.so.1', use_errno=True)
++
++def check(rc):
++    if rc:
++        raise OSError(ctypes.get_errno(), 'LK source page operation failed')
++
++def snapshot(stage, layer, ranges):
++    node_free = {}
++    for p in Path('/sys/devices/system/node').glob('node[0-9]*/meminfo'):
++        node_free[p.parent.name] = next(int(s.split()[3]) for s in p.read_text().splitlines() if 'MemFree:' in s)
++    maps = []
++    starts = {start for start, size in ranges}
++    # Record the VMA containing each source start, even if mappings coalesce.
++    vma_starts = set()
++    for line in Path('/proc/self/maps').read_text().splitlines():
++        lo, hi = (int(s, 16) for s in line.split()[0].split('-'))
++        if any(lo <= start < hi for start in starts):
++            vma_starts.add(lo)
++    for line in Path('/proc/self/numa_maps').read_text().splitlines():
++        if int(line.split()[0], 16) in vma_starts:
++            maps.append(line)
++    locked = next(s for s in Path('/proc/self/status').read_text().splitlines() if s.startswith('VmLck:'))
++    print('LK_SOURCE_LOCK ' + json.dumps(dict(stage=stage, layer=layer, locked=locked, node_free_kib=node_free, maps=maps)), flush=True)
++
++@contextmanager
++def lock_sources(tensors, layer):
++    mode = ctypes.c_int(); mask = (ctypes.c_ulong * 16)()
++    check(libnuma.get_mempolicy(ctypes.byref(mode), mask, 1024, None, 0))
++    if mode.value != 3 or mask[0] != 255:
++        raise RuntimeError('Expected caller NUMA interleave across nodes 0-7')
++    ranges = []
++    for tensor in tensors:
++        if tensor.device.type != 'cpu' or not tensor.is_contiguous():
++            raise ValueError('Source locking requires contiguous CPU weights')
++        ranges.append((tensor.data_ptr(), tensor.numel() * tensor.element_size()))
++    held = []
++    try:
++        for addr, size in ranges:
++            if not size:
++                continue
++            raw = np.ctypeslib.as_array((ctypes.c_ubyte * size).from_address(addr))
++            int(raw[::4096].sum())
++            check(libc.mlock(ctypes.c_void_p(addr), ctypes.c_size_t(size)))
++            held.append((addr, size))
++        snapshot('locked', layer, ranges)
++        yield
++    finally:
++        errors = []
++        for addr, size in reversed(held):
++            rc = libc.munlock(ctypes.c_void_p(addr), ctypes.c_size_t(size))
++            if rc:
++                errors.append(ctypes.get_errno())
++        snapshot('unlocked', layer, ranges)
++        if errors:
++            raise OSError(errors[0], 'Failed to unlock LK source pages')

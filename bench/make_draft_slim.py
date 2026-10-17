@@ -1,6 +1,6 @@
-"""Build a draft-only copy of the DeepSeek V4.1 checkpoint for the DSpark draft model.
+"""Build a draft-only copy of the DeepSeek V4.1 Flash 1017 checkpoint for the DSpark draft model.
 
-Usage: python make_draft_slim.py SRC DST [--prefixes mtp.] [--max-shard-gib 2]
+Usage: python make_draft_slim.py SRC DST [--max-shard-gib 2]
 The DSpark draft is loaded from the full official checkpoint (476 GB, 48 shards), and the
 loader walks every shard although the draft needs only ~10 GiB (mtp.* plus the top-level
 embed/norm/head/image tensors). This writes those tensors, unchanged, into small shards with
@@ -21,7 +21,7 @@ index = json.load(open(os.path.join(src, 'model.safetensors.index.json')))
 wm = index['weight_map']
 keys = [k for k in wm if k.startswith('mtp.') or not k.startswith(('layers.', 'vision', 'aligner'))]
 for name in os.listdir(src):
-    if name.endswith('.safetensors') or name == 'model.safetensors.index.json':
+    if name.startswith('.') or name.endswith('.safetensors') or name == 'model.safetensors.index.json' or os.path.realpath(os.path.join(src, name)) == os.path.realpath(dst):
         continue
     link = os.path.join(dst, name)
     if not os.path.lexists(link):

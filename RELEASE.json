@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-18",
+  "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  "model_revision": "1bae0e1088993b9b82de08f59de5be5a34e42170",
+  "lsglang_commit": "6068667581bebd2184f7e4acb46136f44837889a",
+  "lkqmoe_version": "0.5.4",
+  "lkqmoe_source_commit": "9cbeb6c7a8a3bd2fc36ced525004450eb3a1dee5",
+  "defaults": {
+    "verify_mode": "static",
+    "main_resident_layers": 0,
+    "lkqstrata_slots": 43,
+    "max_running_requests": 2,
+    "kv_tokens": 524288,
+    "batch_tokens": 32768,
+    "engram_gib": 4,
+    "threads": 112,
+    "hybrid_prefill_max": 6144,
+    "cpu_prefill_below": 1024
+  },
+  "validation": {
+    "framework_files_matched_to_serving_copy": 11,
+    "five_context_points_passed": 5,
+    "concurrency_levels": [
+      1,
+      2
+    ],
+    "concurrency_rounds_per_level": 2,
+    "kernel_release_regression_passed": true,
+    "static_and_cap_sts_strict_preflight_passed": true,
+    "invalid_mode_and_missing_sts_rejected": true
+  }
+}

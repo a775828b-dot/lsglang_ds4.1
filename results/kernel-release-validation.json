@@ -1,0 +1,472 @@
+{
+  "version": "0.5.4",
+  "date": "2026-10-18",
+  "source_base": "f0b0586",
+  "python_package_tested": "compiled Python 3.12 bytecode; Triton modules use the existing compressed-source wrapper",
+  "build": "CMake Release, four libraries, package RUNPATH origin",
+  "results": {
+    "mxfp4-check.json": [
+      {
+        "stage": "cpu_bitwise",
+        "h": 256,
+        "i": 128,
+        "m": 1,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 256,
+        "i": 128,
+        "m": 2,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 256,
+        "i": 128,
+        "m": 4,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 256,
+        "i": 128,
+        "m": 6,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 256,
+        "i": 128,
+        "m": 8,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 256,
+        "i": 128,
+        "m": 12,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 256,
+        "i": 128,
+        "m": 64,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 256,
+        "i": 128,
+        "m": 257,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 2560,
+        "i": 640,
+        "m": 1,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 2560,
+        "i": 640,
+        "m": 2,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 2560,
+        "i": 640,
+        "m": 4,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 2560,
+        "i": 640,
+        "m": 6,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 2560,
+        "i": 640,
+        "m": 8,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 2560,
+        "i": 640,
+        "m": 12,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 2560,
+        "i": 640,
+        "m": 64,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 2560,
+        "i": 640,
+        "m": 257,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 4096,
+        "i": 2048,
+        "m": 1,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 4096,
+        "i": 2048,
+        "m": 2,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 4096,
+        "i": 2048,
+        "m": 4,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 4096,
+        "i": 2048,
+        "m": 6,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 4096,
+        "i": 2048,
+        "m": 8,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 4096,
+        "i": 2048,
+        "m": 12,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 4096,
+        "i": 2048,
+        "m": 64,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 4096,
+        "i": 2048,
+        "m": 257,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 5120,
+        "i": 2304,
+        "m": 1,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 5120,
+        "i": 2304,
+        "m": 2,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 5120,
+        "i": 2304,
+        "m": 4,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 5120,
+        "i": 2304,
+        "m": 6,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 5120,
+        "i": 2304,
+        "m": 8,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 5120,
+        "i": 2304,
+        "m": 12,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 5120,
+        "i": 2304,
+        "m": 64,
+        "ok": true
+      },
+      {
+        "stage": "cpu_bitwise",
+        "h": 5120,
+        "i": 2304,
+        "m": 257,
+        "ok": true
+      },
+      {
+        "stage": "gpu_prefill",
+        "unpack": "0",
+        "m": 6,
+        "relative_l2": 0.001665636226110014
+      },
+      {
+        "stage": "gpu_prefill",
+        "unpack": "0",
+        "m": 64,
+        "relative_l2": 0.0016948890730580002
+      },
+      {
+        "stage": "gpu_prefill",
+        "unpack": "1",
+        "m": 6,
+        "relative_l2": 0.0016760753080601474
+      },
+      {
+        "stage": "gpu_prefill",
+        "unpack": "1",
+        "m": 64,
+        "relative_l2": 0.0016868845827853344
+      },
+      {
+        "stage": "gpu_pool_graph",
+        "relative_l2": 0.0010790197866139082
+      }
+    ],
+    "avx2-check.json": [
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "0",
+        "m": 1,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "0",
+        "m": 2,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "0",
+        "m": 4,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "0",
+        "m": 6,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "0",
+        "m": 8,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "0",
+        "m": 12,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "0",
+        "m": 64,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "0",
+        "m": 257,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "1",
+        "m": 1,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "1",
+        "m": 2,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "1",
+        "m": 4,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "1",
+        "m": 6,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "1",
+        "m": 8,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "1",
+        "m": 12,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "1",
+        "m": 64,
+        "ok": true
+      },
+      {
+        "stage": "avx2_nv_mx_and_legacy",
+        "down_bf16": "1",
+        "m": 257,
+        "ok": true
+      }
+    ],
+    "mxfp4-adaptive.json": {
+      "windows": 300,
+      "worst_relative_l2": 0.0017346292981807877,
+      "commits": [
+        21,
+        21
+      ],
+      "resident": [
+        26,
+        27,
+        29,
+        30,
+        31
+      ]
+    },
+    "mxfp4-real.json": {
+      "scale_range": [
+        119,
+        122
+      ],
+      "checks": [
+        {
+          "scale": 1,
+          "m": 1,
+          "cpu_fp64_rel": 0.0016543248538643726,
+          "gpu_fp64_rel": 0.0017237105931814172
+        },
+        {
+          "scale": 1,
+          "m": 6,
+          "cpu_fp64_rel": 0.0016895046285605034,
+          "gpu_fp64_rel": 0.0017132668146758031
+        },
+        {
+          "scale": 8,
+          "m": 1,
+          "cpu_fp64_rel": 0.0011214211258915529,
+          "gpu_fp64_rel": 0.0017423496048588028
+        },
+        {
+          "scale": 8,
+          "m": 6,
+          "cpu_fp64_rel": 0.0011488422622524135,
+          "gpu_fp64_rel": 0.0017394855992642387
+        },
+        {
+          "stage": "pool",
+          "m": 1,
+          "scale": 1,
+          "fp64_rel": 0.0016543247753187068
+        },
+        {
+          "stage": "pool",
+          "m": 6,
+          "scale": 1,
+          "fp64_rel": 0.0016896378734210648
+        },
+        {
+          "stage": "pool",
+          "m": 1,
+          "scale": 8,
+          "fp64_rel": 0.0011214050568812753
+        },
+        {
+          "stage": "pool",
+          "m": 6,
+          "scale": 8,
+          "fp64_rel": 0.0011488488405047125
+        }
+      ],
+      "activation_quant": "bitwise vs independent torch reference"
+    },
+    "legacy-wrapper-check.json": {
+      "old_python_version": "deployed 0.5.0",
+      "new_library": "0.5.4 release build",
+      "cpu_cases": 7,
+      "cpu_bitwise_equal": true,
+      "old_python_new_cuda_mailbox_bitwise_equal": true,
+      "process_isolation": "One library SONAME per process, as in production"
+    }
+  },
+  "package_sha256": {
+    "liblkqmoe.so": "9a189b49d50309b9cf5e6a0bfe6d080274c31252f5977619ba4a294f787a11d7",
+    "liblkqmoe_avx2.so": "c9c8b6c5e03ef0e99bde5a4b6c67b8ad7ffdd3358f3901480516dfa88bdf8b31",
+    "liblkqmoe_avx512.so": "0b0e8993075f8023379687c85af81971a606f283e2a468eb6a20bba1add9ce6d",
+    "liblkqmoe_cuda.so": "799bda436a6dab18daf0fb21e27d168df99d02a749f9b29881702c384fe5078f",
+    "python/lkqmoe/__init__.pyc": "0e5b2c34a9f1e6abbe440f94910a5f4e95c8fdb3e77229bd6481459950e1d5f7",
+    "python/lkqmoe/integration.pyc": "00f2c6d3df5a73e3cc7fe1638ef08f089732c54527fce8456b599660d2c736a3",
+    "python/lkqmoe/pool.pyc": "f873ada8917a3010ee05e130abf3504dda95fb19384a45b463aa917ce1798998",
+    "python/lkqmoe/prefill.pyc": "05c8ceccf48158375077c18aef727803209bcee69b6ed4f6ebdebba16cebb8af",
+    "python/lkqmoe/standalone.pyc": "7a39684322563f0c72cb6d4238ab027cb2817b0d200ab1a39f2b64e579dbe2ae",
+    "python/lkqmoe/tp.pyc": "81c113d78b819dd7f47bee0722e23791671be33838ede1ceb308054d03f0a362",
+    "python/lkqmoe/zerocopy.pyc": "2687bdab05a318f2af5141c9e8467851f2b14bb4f2217582653e9655704face7"
+  },
+  "source_sha256": {
+    "include/lkqmoe.h": "78139a345453a282a8dd8b8e5b64566f091bdbe04fdee34d3f6507417cce137f",
+    "src/lkqmoe.cpp": "35a19033ffda680fb374bb12e20938999d1cf8e8a10510f1183c20224a6ea731",
+    "src/dispatch.cpp": "d7241fb0a84eb2f38b94cc11a5371ca0a3acec2be8014a3b3668f4203200b68c",
+    "src/cuda_doorbell.cpp": "c5b040e440155b6775e4ec0827e86d4d5e8d752b1c4cb54a8c1778ba93e8846e",
+    "python/lkqmoe/__init__.py": "96d521b0575027d60c2411801de6da82b7ed2748b931fd2ca4819b11c720ce8a",
+    "python/lkqmoe/standalone.py": "40341964b4b203686c8e2e0e08553cd41d5d8a1efbb87a1600e6d21712011a98",
+    "python/lkqmoe/prefill.py": "3673abd6b0c0c90bf8789f1408e87bc06da24622df07246a15ca4bdd2e27e370",
+    "python/lkqmoe/pool.py": "31731be85e38861cbc111000aaeec16f3a6349e08968939b5515c6a610141368"
+  },
+  "avx2_binary_instruction_audit": {
+    "liblkqmoe.so": 0,
+    "liblkqmoe_avx2.so": 0
+  },
+  "limits": [
+    "No actual AVX2-only-host deployment or MXFP4 multi-GPU TP deployment test",
+    "Whole-model throughput was measured on the current serving build; release-package numerical and ABI checks are recorded separately"
+  ]
+}

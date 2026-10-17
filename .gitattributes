@@ -4,3 +4,7 @@
 *.sh text eol=lf
 *.py text eol=lf
 *.patch -text
+
+# Patch artifacts retain upstream whitespace so applying them reproduces the measured source exactly.
+patches/*.patch -whitespace
+*.whl binary

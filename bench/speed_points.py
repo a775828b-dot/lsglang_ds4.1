@@ -1,7 +1,7 @@
 """Prefill / decode speed at several input lengths against an OpenAI-compatible sglang server.
 
 Usage:
-  python speed_points.py --port 39503 --model DeepSeek-V4.1-Flash --tokenizer /path/to/model \
+  python speed_points.py --port 39504 --model DeepSeek-V4.1-Flash-1017 --tokenizer /path/to/model \
       --points 4096,16384,32768,65536,131072,262144,393216,500000 --output 1024 --out result.json
 Each point: a filler document of about that many tokens with one fact buried at 10% depth
 and a question about it at the end (a new random document per point, so no prefix-cache
@@ -71,7 +71,7 @@ def accept_length():
 def run(tokens):
     text, code = document(tokens, seed=tokens + A.seed)
     body = dict(model=A.model, messages=[{'role': 'user', 'content': text}], stream=True, max_tokens=A.output,
-                temperature=0, ignore_eos=True, stream_options={'include_usage': True})
+                temperature=0, ignore_eos=True, return_spec_tokens_details=True, stream_options={'include_usage': True})
     peak, stop = [vram()], threading.Event()
     def poll():
         while not stop.is_set():
@@ -79,7 +79,7 @@ def run(tokens):
     threading.Thread(target=poll, daemon=True).start()
     req = urllib.request.Request(BASE + '/v1/chat/completions', json.dumps(body).encode(),
                                  {'Content-Type': 'application/json'})
-    t0 = time.time(); first = None; out = []; usage = {}; error = None
+    t0 = time.time(); first = None; out = []; usage = {}; error = None; spec = None
     try:
         with urllib.request.urlopen(req, timeout=7200) as r:
             for raw in r:
@@ -87,6 +87,7 @@ def run(tokens):
                     continue
                 v = json.loads(raw[5:])
                 usage = v.get('usage') or usage
+                spec = (v.get('sglext') or {}).get('spec_tokens_details') or spec
                 for c in v.get('choices', []):
                     d = c.get('delta', {})
                     piece = (d.get('content') or '') + (d.get('reasoning_content') or '')
@@ -96,19 +97,22 @@ def run(tokens):
         error = repr(exc)
     t1 = time.time(); stop.set()
     prompt, completion = usage.get('prompt_tokens') or 0, usage.get('completion_tokens') or 0
-    acc = accept_length()
+    legacy_acc = accept_length()
+    acc = spec.get('spec_accept_length') if spec else None
     return dict(target=tokens, prompt_tokens=prompt, completion_tokens=completion,
                 ttft_s=first and round(first - t0, 2),
                 prefill_tok_s=first and prompt and round(prompt / (first - t0)),
                 decode_tok_s=first and completion and round(completion / max(t1 - first, 1e-6), 1),
-                accept_length=acc and round(acc, 2), recall=code in ''.join(out), vram_peak_mib=peak[0], error=error)
+                accept_length=acc and round(acc, 2), accept_source='per_request', legacy_cumulative_accept_length=legacy_acc, spec_tokens_details=spec, cached_tokens=(usage.get('prompt_tokens_details') or {}).get('cached_tokens'), recall=code in ''.join(out), vram_peak_mib=peak[0], error=error)
 
 
 rows = []
 for n in [int(x) for x in A.points.split(',')]:
     rows.append(run(n))
     print(json.dumps(rows[-1], ensure_ascii=False), flush=True)
-    if A.stop_on_fail and (rows[-1]['error'] or not rows[-1]['recall']):
+    if A.out:
+        json.dump(rows, open(A.out, 'w'), indent=1)
+    if A.stop_on_fail and (rows[-1]['error'] or not rows[-1]['recall'] or rows[-1]['completion_tokens'] != A.output):
         break
 if A.out:
     json.dump(rows, open(A.out, 'w'), indent=1)
