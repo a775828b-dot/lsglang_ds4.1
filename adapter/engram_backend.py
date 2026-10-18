@@ -28,6 +28,17 @@ _lib.row_store_stats.restype = None
 _lib.row_store_io_stats.argtypes = [P, C.POINTER(U)]
 _lib.row_store_preload_scales.argtypes = [P]
 _lib.row_store_preload_scales.restype = C.c_int
+_lib.row_store_timing.argtypes = [P, C.POINTER(U)]
+_lib.row_store_timing.restype = None
+
+# 2026-10-19 (DS41_ENGRAM_PREFETCH=1): a decode / verify step needs the rows of Engram layers 1
+# and 14 only when it reaches them, but their hash ids exist right after hashing. Each layer's
+# lookup (ids D2H, host callback, rows H2D, gather) then runs on its own side stream from there,
+# overlapping layer 0 (and layers 2-13 for layer 14) instead of stalling the main stream at the
+# layer. Same rows, same kernels; the wkv projection stays on the main stream (its GEMM backend
+# may share a workspace across streams). Prefill keeps the inline lookup.
+_PREFETCH = os.environ.get('DS41_ENGRAM_PREFETCH', '0') == '1'
+_REGISTRY = {}   # model layer id -> EngramEmbedding of this rank
 
 class Work(C.Structure):
     _fields_ = [('store', P), ('ids', P), ('weights', P), ('scales', P), ('count', U)]
@@ -124,9 +135,13 @@ def install(module):
                                     _lib.row_store_io_stats(self._store, io_values)
                     values = (U * 4)()
                     _lib.row_store_stats(self._store, values)
+                    timing = (U * 3)()
+                    _lib.row_store_timing(self._store, timing)
                     record = dict(layer=layer_id, pid=os.getpid(), mode=os.getenv('OFFLOAD_MODE'),
                                   hits=values[0], misses=values[1], reads=values[2], cache_bytes=values[3], timestamp=time.time(), io_batches=io_values[0],
-                                  peak_batch_pages=io_values[1], scale_ram_bytes=io_values[2], scale_error=scale_error)
+                                  peak_batch_pages=io_values[1], scale_ram_bytes=io_values[2], scale_error=scale_error,
+                                  lookups=timing[1], lookup_ns_total=timing[0], lookup_max_ns=timing[2],
+                                  prefetch=_PREFETCH)
                     temporary = destination / f'layer-{layer_id}.tmp'
                     temporary.write_text(json.dumps(record))
                     temporary.replace(destination / f'layer-{layer_id}.json')
@@ -134,6 +149,9 @@ def install(module):
             threading.Thread(target=report_stats, daemon=True).start()
         self._staging = {}
         self._works = {}
+        self._pending = None
+        self._prefetch_stream = None
+        _REGISTRY[layer_id] = self
         # The loader sees names but never allocates/copies the complete tables.
         self.weight = torch.nn.Parameter(torch.empty(0, dtype=torch.float8_e4m3fn), requires_grad=False)
         self.scale = torch.nn.Parameter(torch.empty(0, dtype=torch.float8_e8m0fnu), requires_grad=False)
@@ -146,7 +164,30 @@ def install(module):
         logging.getLogger(__name__).info('Exact %s Engram layer=%s rank=%s rows=[%s,%s) cache_budget=%s',
                                         os.getenv('OFFLOAD_MODE', 'nvme'), layer_id, rank, self.row_start, end, budget)
 
+    def prefetch(self, indices):
+        """Start this layer's lookup of `indices` on the side stream (main stream, after hashing)."""
+        self._pending = None
+        if self._prefetch_stream is None:
+            if torch.cuda.is_current_stream_capturing():
+                return   # created on the eager warm-up pass before any capture
+            self._prefetch_stream = torch.cuda.Stream(device=indices.device)
+        side = self._prefetch_stream
+        side.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(side):
+            out = lookup(self, indices)
+        indices.record_stream(side)
+        self._pending = (indices.data_ptr(), tuple(indices.shape), tuple(indices.stride()), out)
+
     def owned(self, indices):
+        pending, self._pending = self._pending, None
+        if pending is not None and pending[:3] == (indices.data_ptr(), tuple(indices.shape), tuple(indices.stride())):
+            main = torch.cuda.current_stream()
+            main.wait_stream(self._prefetch_stream)
+            pending[3].record_stream(main)
+            return pending[3]
+        return lookup(self, indices)
+
+    def lookup(self, indices):
         from sglang.kernels.ops.embeddings.engram_gather import engram_gather
         count = indices.numel()
         if not count:
@@ -179,3 +220,25 @@ def install(module):
         return out
     cls.__init__ = init
     cls._owned_rows = owned
+    cls.prefetch = prefetch
+
+    hasher = module.EngramHasher
+    hasher_init, hasher_forward = hasher.__init__, hasher.forward
+
+    def init_hasher(self, layout, *args, **kwargs):
+        hasher_init(self, layout, *args, **kwargs)
+        self._ds41_layer_ids = list(layout.layer_ids)   # hash_ids[:, j] belongs to layer_ids[j]
+
+    def forward_hasher(self, input_ids, forward_batch):
+        hash_ids = hasher_forward(self, input_ids, forward_batch)
+        mode = forward_batch.forward_mode
+        if (_PREFETCH and hash_ids.is_cuda and hash_ids.shape[0]
+                and (mode.is_decode() or mode.is_target_verify())):
+            for j, layer_id in enumerate(self._ds41_layer_ids):
+                embedding = _REGISTRY.get(layer_id)
+                if embedding is not None and embedding.rows:
+                    embedding.prefetch(hash_ids[:, j])
+        return hash_ids
+
+    hasher.__init__ = init_hasher
+    hasher.forward = forward_hasher

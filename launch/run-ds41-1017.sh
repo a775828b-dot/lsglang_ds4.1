@@ -73,6 +73,9 @@ export DS41_EARLY_LK_MOE=${DS41_EARLY_LK_MOE:-1}
 # length bound (no D2H sync), draft LM head in row-scaled FP8. 0 = the previous path.
 export DS41_DENSE_FP4_INDEXER=${DS41_DENSE_FP4_INDEXER:-1} DS41_C128_HOST_BOUND=${DS41_C128_HOST_BOUND:-1} \
   DS41_DRAFT_LMHEAD_FP8=${DS41_DRAFT_LMHEAD_FP8:-1}
+# Engram rows of layers 1 / 14 are looked up right after hashing on side streams (decode / verify);
+# 0 = inline lookup. DS41_ENGRAM_IO_THREADS (default 16) = parallel O_DIRECT readers per lookup.
+export DS41_ENGRAM_PREFETCH=${DS41_ENGRAM_PREFETCH:-1}
 export SGLANG_LK_MOE_NVME_STAGING=1 SGLANG_LK_MOE_NVME_SCRATCH="$LOADER_SCRATCH"
 export LVLLM_GPU_PREFETCH_WINDOW=1 LVLLM_ENABLE_NUMA_INTERLEAVE=1 LK_THREAD_BINDING=CPU_CORE
 export LD_PRELOAD="$REPO/adapter/libnuma_fallback.so${LD_PRELOAD:+:$LD_PRELOAD}"

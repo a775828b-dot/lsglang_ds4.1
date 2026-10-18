@@ -1,0 +1,40 @@
+{
+ "note": "522,240-token target, 1024 output tokens, KV pool 524288; GPU peak from nvidia-smi sampled every second, host minimum MemAvailable",
+ "points": [
+  {
+   "target": 522240,
+   "prompt_tokens": 522300,
+   "completion_tokens": 1024,
+   "ttft_s": 139.66,
+   "prefill_tok_s": 3740,
+   "decode_tok_s": 86.5,
+   "accept_length": 3.49,
+   "accept_source": "per_request",
+   "legacy_cumulative_accept_length": 3.425,
+   "spec_tokens_details": {
+    "spec_accept_rate": 0.49965870307167237,
+    "spec_accept_length": 3.4948805460750854,
+    "spec_cap_length": 0.0,
+    "spec_block_accept_length": 0.0,
+    "spec_num_correct_drafts": 732,
+    "spec_num_proposed_drafts": 1465,
+    "spec_verify_ct": 293,
+    "spec_correct_drafts_histogram": [
+     44,
+     59,
+     51,
+     44,
+     36,
+     59
+    ],
+    "spec_cap_lens_histogram": []
+   },
+   "cached_tokens": null,
+   "recall": true,
+   "vram_peak_mib": 71914,
+   "error": null
+  }
+ ],
+ "gpu_peak_mib": 71914,
+ "host_min_available_gib": 14
+}

@@ -5,6 +5,7 @@
 #include <array>
 #include <linux/aio_abi.h>
 #include <sys/syscall.h>
+#include <time.h>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
@@ -12,6 +13,9 @@
 #include <cstring>
 #include <fcntl.h>
 #include <mutex>
+#include <condition_variable>
+#include <thread>
+#include <vector>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -32,7 +36,12 @@ struct Store {
   size_t resident_size = 0;
   std::mutex locks[256];
   std::atomic<uint64_t> hits{0}, misses{0}, reads{0};
+  std::atomic<uint64_t> lookup_ns{0}, lookups{0}, lookup_max_ns{0};
 };
+// 2026-10-19: misses of a whole lookup share AIO rounds of up to kBatchPages page reads (the
+// old code paid one round per 32 rows: ~40K serial rounds per layer for a fresh 93K-token prefill).
+static constexpr size_t kBatchPages = 512;
+
 struct Work {
   Store *store;
   const int64_t *ids;
@@ -92,9 +101,9 @@ extern "C" Store *row_store_open(const char *path, uint64_t rows,
     if (s->cache == MAP_FAILED || s->keys == MAP_FAILED) fail("cache allocation");
   }
   if (!ram) {
-    if (posix_memalign(reinterpret_cast<void **>(&s->pages), 4096, 128 * 4096))
+    if (posix_memalign(reinterpret_cast<void **>(&s->pages), 4096, kBatchPages * 4096))
       fail("batch buffer allocation");
-    if (syscall(SYS_io_setup, 128, &s->aio) < 0) fail("io_setup");
+    if (syscall(SYS_io_setup, kBatchPages, &s->aio) < 0) fail("io_setup");
   }
   return s;
 }
@@ -208,53 +217,179 @@ struct ReadBatch {
   }
 };
 
+static uint64_t now_ns() {
+  timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return uint64_t(t.tv_sec) * 1000000000ull + uint64_t(t.tv_nsec);
+}
+
+static void row_store_lookup_batched(void *opaque);
+
+// Time spent inside the callback (cache, I/O, copies); the GPU-visible gap minus this
+// is the callback's dispatch latency.
 extern "C" void row_store_lookup(void *opaque) {
-  auto *work = static_cast<Work *>(opaque);
-  Store *s = work->store;
-  if (s->resident) { row_store_lookup_serial(opaque); return; }
-  // One callback owns the bounded I/O buffers and cache until every read completes.
-  std::lock_guard<std::mutex> guard(s->batch_lock);
-  for (uint64_t begin = 0; begin < work->count; begin += 32) {
-    ReadBatch batch;
-    std::array<uint64_t, 32> misses{};
-    size_t miss_count = 0;
-    uint64_t end = begin + std::min(uint64_t(32), work->count - begin);
-    for (uint64_t i = begin; i < end; ++i) {
-      int64_t id = work->ids[i];
-      if (id < 0 || uint64_t(id) >= s->rows) fail("row ID out of bounds");
-      if (uint64_t(id) < s->row_lo || uint64_t(id) >= s->row_hi) {
-        std::memset(work->weights + i * 256, 0, 256);
-        std::memset(work->scales + i * 8, 0, 8);
-        continue;
-      }
-      uint64_t slot = s->slots ? uint64_t(id) % s->slots : 0;
-      if (s->slots && s->keys[slot] == uint64_t(id) + 1) {
-        std::memcpy(work->weights + i * 256, s->cache + slot * 264, 256);
-        std::memcpy(work->scales + i * 8, s->cache + slot * 264 + 256, 8);
-        ++s->hits;
-      } else {
-        misses[miss_count++] = i;
-        batch.add(s->weight_offset + uint64_t(id) * 256, 256);
-        if (!s->scale_data) batch.add(s->scale_offset + uint64_t(id) * 8, 8);
-        ++s->misses;
-      }
-    }
-    batch.read(s);
-    for (size_t j = 0; j < miss_count; ++j) {
-      uint64_t i = misses[j], id = work->ids[i];
-      uint8_t row[264];
-      batch.copy(s, s->weight_offset + id * 256, row, 256);
-      if (s->scale_data) std::memcpy(row + 256, s->scale_data + id * 8, 8);
-      else batch.copy(s, s->scale_offset + id * 8, row + 256, 8);
-      std::memcpy(work->weights + i * 256, row, 256);
-      std::memcpy(work->scales + i * 8, row + 256, 8);
-      if (s->slots) {
-        uint64_t slot = id % s->slots;
-        std::memcpy(s->cache + slot * 264, row, 264);
-        s->keys[slot] = id + 1;
-      }
+  const uint64_t start = now_ns();
+  Store *s = static_cast<Work *>(opaque)->store;
+  if (s->resident) row_store_lookup_serial(opaque);
+  else row_store_lookup_batched(opaque);
+  const uint64_t took = now_ns() - start;
+  s->lookup_ns.fetch_add(took, std::memory_order_relaxed);
+  s->lookups.fetch_add(1, std::memory_order_relaxed);
+  uint64_t seen = s->lookup_max_ns.load(std::memory_order_relaxed);
+  while (took > seen && !s->lookup_max_ns.compare_exchange_weak(seen, took)) {}
+}
+
+extern "C" void row_store_timing(Store *s, uint64_t *out) {
+  out[0] = s->lookup_ns.load(); out[1] = s->lookups.load(); out[2] = s->lookup_max_ns.load();
+}
+
+// Persistent reader threads (DS41_ENGRAM_IO_THREADS, default 16): the O_DIRECT reads of one lookup
+// run concurrently, so the NVMe sees real queue depth (native AIO here completed them one by one).
+// The calling (CUDA callback) thread takes part as well. One job at a time.
+struct IoPool {
+  std::mutex job_lock, m;
+  std::condition_variable start, finish;
+  std::vector<std::thread> threads;
+  uint64_t generation = 0;
+  int fd = -1;
+  const uint64_t *offsets = nullptr;
+  const uint32_t *required = nullptr;
+  uint8_t *pages = nullptr;
+  size_t count = 0;
+  std::atomic<size_t> next{0};
+  size_t active = 0;
+  std::atomic<bool> failed{false};
+
+  void run_share() {
+    for (size_t j; (j = next.fetch_add(1)) < count;) {
+      ssize_t got;
+      do { got = pread(fd, pages + j * 4096, 4096, offsets[j]); } while (got < 0 && errno == EINTR);
+      if (got < 0 || uint64_t(got) < required[j]) failed = true;
     }
   }
+  void worker() {
+    uint64_t seen = 0;
+    for (;;) {
+      {
+        std::unique_lock<std::mutex> lock(m);
+        start.wait(lock, [&] { return generation != seen; });
+        seen = generation;
+      }
+      run_share();
+      std::lock_guard<std::mutex> lock(m);
+      if (--active == 0) finish.notify_one();
+    }
+  }
+  IoPool() {
+    const char *env = std::getenv("DS41_ENGRAM_IO_THREADS");
+    int n = env ? std::atoi(env) : 16;
+    for (int k = 0; k < std::max(0, n); ++k) threads.emplace_back([this] { worker(); });
+    for (auto &t : threads) t.detach();
+  }
+  void read(int fd_, const uint64_t *offsets_, const uint32_t *required_, uint8_t *pages_, size_t count_) {
+    std::lock_guard<std::mutex> job(job_lock);
+    {
+      std::lock_guard<std::mutex> lock(m);
+      fd = fd_; offsets = offsets_; required = required_; pages = pages_; count = count_;
+      next = 0; failed = false; active = threads.size(); ++generation;
+    }
+    start.notify_all();
+    run_share();
+    std::unique_lock<std::mutex> lock(m);
+    finish.wait(lock, [&] { return active == 0; });
+    if (failed) fail("short or failed direct read");
+  }
+};
+
+static IoPool &io_pool() {
+  static IoPool *pool = new IoPool();   // never destroyed: threads are detached
+  return *pool;
+}
+
+// Read `count` 4 KiB pages at `offsets` into s->pages[0..count); page j must return at least
+// required[j] bytes.
+static void read_pages(Store *s, const uint64_t *offsets, const uint32_t *required, size_t count) {
+  if (!count) return;
+  io_pool().read(s->fd, offsets, required, s->pages, count);
+  s->reads.fetch_add(count, std::memory_order_relaxed);
+  ++s->batches;
+  if (count > s->peak_pages.load()) s->peak_pages.store(count);
+}
+
+// Copy `length` bytes starting at file offset `offset` out of consecutive pages from `page`.
+static void copy_pages(const Store *s, uint32_t page, uint64_t offset, uint8_t *out, size_t length) {
+  size_t delta = offset & 4095;
+  while (length) {
+    size_t take = std::min(length, size_t(4096) - delta);
+    std::memcpy(out, s->pages + size_t(page) * 4096 + delta, take);
+    out += take; length -= take; delta = 0; ++page;
+  }
+}
+
+struct Miss { uint64_t index, id; uint32_t weight_page, scale_page; };
+
+static void row_store_lookup_batched(void *opaque) {
+  auto *work = static_cast<Work *>(opaque);
+  Store *s = work->store;
+  // One callback owns the I/O buffer and the cache until every read completes.
+  std::lock_guard<std::mutex> guard(s->batch_lock);
+  static thread_local std::array<uint64_t, kBatchPages> offsets;
+  static thread_local std::array<uint32_t, kBatchPages> required;
+  static thread_local std::array<Miss, kBatchPages> misses;
+  size_t pages = 0, miss_count = 0;
+  auto add_pages = [&](uint64_t offset, size_t length) {
+    const uint32_t first = uint32_t(pages);
+    uint64_t base = offset & ~uint64_t(4095);
+    size_t need = (offset - base) + length;
+    while (need) {
+      offsets[pages] = base;
+      required[pages] = uint32_t(std::min(need, size_t(4096)));
+      ++pages; base += 4096; need -= std::min(need, size_t(4096));
+    }
+    return first;
+  };
+  auto flush = [&]() {
+    read_pages(s, offsets.data(), required.data(), pages);
+    for (size_t k = 0; k < miss_count; ++k) {
+      const Miss &m = misses[k];
+      uint8_t row[264];
+      copy_pages(s, m.weight_page, s->weight_offset + m.id * 256, row, 256);
+      if (s->scale_data) std::memcpy(row + 256, s->scale_data + m.id * 8, 8);
+      else copy_pages(s, m.scale_page, s->scale_offset + m.id * 8, row + 256, 8);
+      std::memcpy(work->weights + m.index * 256, row, 256);
+      std::memcpy(work->scales + m.index * 8, row + 256, 8);
+      if (s->slots) {
+        uint64_t slot = m.id % s->slots;
+        std::memcpy(s->cache + slot * 264, row, 264);
+        s->keys[slot] = m.id + 1;
+      }
+    }
+    pages = miss_count = 0;
+  };
+  for (uint64_t i = 0; i < work->count; ++i) {
+    int64_t id = work->ids[i];
+    if (id < 0 || uint64_t(id) >= s->rows) fail("row ID out of bounds");
+    if (uint64_t(id) < s->row_lo || uint64_t(id) >= s->row_hi) {
+      std::memset(work->weights + i * 256, 0, 256);
+      std::memset(work->scales + i * 8, 0, 8);
+      continue;
+    }
+    uint64_t slot = s->slots ? uint64_t(id) % s->slots : 0;
+    if (s->slots && s->keys[slot] == uint64_t(id) + 1) {
+      std::memcpy(work->weights + i * 256, s->cache + slot * 264, 256);
+      std::memcpy(work->scales + i * 8, s->cache + slot * 264 + 256, 8);
+      ++s->hits;
+      continue;
+    }
+    // a row needs at most 2 weight pages and 2 scale pages
+    if (pages + 4 > kBatchPages || miss_count == kBatchPages) flush();
+    Miss m{i, uint64_t(id), 0, 0};
+    m.weight_page = add_pages(s->weight_offset + uint64_t(id) * 256, 256);
+    if (!s->scale_data) m.scale_page = add_pages(s->scale_offset + uint64_t(id) * 8, 8);
+    misses[miss_count++] = m;
+    ++s->misses;
+  }
+  flush();
 }
 
 

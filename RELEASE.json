@@ -20,7 +20,9 @@
     "c128_host_length_bound": true,
     "draft_lm_head_fp8": true,
     "lkqstrata_every": 2,
-    "lkqstrata_swaps": 32
+    "lkqstrata_swaps": 32,
+    "engram_prefetch": true,
+    "engram_io_threads": 16
   },
   "validation": {
     "framework_files_matched_to_serving_copy": 14,
@@ -33,7 +35,8 @@
     "kernel_release_regression_passed": true,
     "static_and_cap_sts_strict_preflight_passed": true,
     "invalid_mode_and_missing_sts_rejected": true,
-    "full_capacity_522k_no_oom": true
+    "full_capacity_522k_no_oom": true,
+    "engram_row_store_ab_identical": true
   },
   "api_compatibility": {
     "developer_role": "mapped to native system before preprocessing; content and order preserved",

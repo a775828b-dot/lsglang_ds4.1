@@ -1,0 +1,16 @@
+{
+ "note": "one fresh 93,149-token prompt; Engram lookup time from the row store timing counters",
+ "before": {
+  "request_s": 27.1,
+  "layer1_lookup_s": 3.08,
+  "layer14_lookup_s": 2.8,
+  "io_rounds_per_layer": 39898
+ },
+ "after": {
+  "request_s": 24.5,
+  "layer1_lookup_s": 1.87,
+  "layer14_lookup_s": 1.54,
+  "io_rounds_per_layer": 1259
+ },
+ "miss_rate": 0.27
+}

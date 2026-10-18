@@ -3,7 +3,7 @@
 官方 **DeepSeek-V4.1-Flash-1017（MXFP4）** 单卡推理框架：RTX PRO 5000 72GB、双路 EPYC，
 **512K 共享 KV、最多 2 并发、DSpark、默认 static 验证**，附编译好的 **lkqmoe 0.5.4**。
 本页参数和速度来自 2026-10-19 的 1017 优化版部署：长上下文 prefill 不再随长度下跌，
-500K 首字 252 → 135 秒，decode 每步快约 5%。10-18 版数据保留在 `results/` 作对照。
+500K 首字 252 → 131 秒，decode 每步快约 10%。10-18 版数据保留在 `results/` 作对照。
 
 框架基于 [guqiong96/Lsglang](https://github.com/guqiong96/Lsglang)；
 lkqmoe 受该作者的 lk_moe CPU MoE 后端启发，是独立实现的通用 CPU/GPU MoE 内核，不包含 lk_moe 实现代码。
@@ -11,8 +11,8 @@ lkqmoe 受该作者的 lk_moe CPU MoE 后端启发，是独立实现的通用 CP
 
 English: DeepSeek V4.1 Flash 1017 MXFP4 on one GPU, with 512K shared KV, two concurrent
 requests, GPU-resident DSpark and the compiled lkqmoe 0.5.4 backend. The 2026-10-19 update keeps
-long prefills on the DeepGEMM FP4 indexer (500K first token 252 s → 135 s) and trims about 5% off
-each decode step.
+long prefills on the DeepGEMM FP4 indexer (500K first token 252 s → 131 s), takes the Engram row
+lookups off the decode critical path and trims about 10% off each decode step.
 
 ## 组成
 
@@ -21,7 +21,7 @@ each decode step.
 | 模型与草稿 | [deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017)，revision `1bae0e1088993b9b82de08f59de5be5a34e42170`；草稿从同一检查点提取 |
 | Lsglang 基线 | `6068667581bebd2184f7e4acb46136f44837889a` |
 | 1017 框架补丁 | `patches/lsglang-6068667-1017.patch`（14 个文件），含官方会话编码、block-32 激活量化、Engram 与 DSpark 调整，以及 10-19 的 decode 验证免同步和草稿词表头 FP8 |
-| 运行时覆盖 | `overlay/`（含 10-19 的 prefill 索引器分块）；Engram 行存储、量化和按层提前加载在 `adapter/` |
+| 运行时覆盖 | `overlay/`（含 10-19 的 prefill 索引器分块）；Engram 行存储（10-19 起提前查表、并行读）、量化和按层提前加载在 `adapter/` |
 | lkqmoe | 0.5.4；源码提交 `9cbeb6c7a8a3bd2fc36ced525004450eb3a1dee5`；4 个动态库、Python 3.12 字节码、GPU 适配和热专家排名种子 |
 | 启动入口 | `launch/run-ds41-1017.sh` |
 | 依赖 | `requirements-lock.txt`；附本次使用的 FlashInfer 0.6.18 和 b12x 1.3.0 轮子 |
@@ -54,21 +54,25 @@ each decode step.
 
 | 实际输入 token | 首字时间 s | prefill tok/s | decode tok/s | 接受长度 | 10-18 版首字 s / prefill tok/s |
 |---:|---:|---:|---:|---:|---:|
-| 65,524 | 17.11 | 3,829 | 78.9 | 3.09 | 17.90 / 3,661 |
-| 131,076 | 31.30 | 4,188 | 80.3 | 3.14 | 44.25 / 2,962 |
-| 262,113 | 63.79 | 4,109 | 79.9 | 3.11 | 98.53 / 2,660 |
-| 393,206 | 100.18 | 3,925 | 90.2 | 3.48 | 173.67 / 2,264 |
-| 499,961 | 134.76 | 3,710 | 79.9 | 3.25 | 252.07 / 1,983 |
+| 65,524 | 15.04 | 4,356 | 87.6 | 3.29 | 17.90 / 3,661 |
+| 131,076 | 29.83 | 4,394 | 85.5 | 3.23 | 44.25 / 2,962 |
+| 262,113 | 61.35 | 4,272 | 93.2 | 3.57 | 98.53 / 2,660 |
+| 393,206 | 96.91 | 4,058 | 83.6 | 3.28 | 173.67 / 2,264 |
+| 499,961 | 131.14 | 3,812 | 78.9 | 3.01 | 252.07 / 1,983 |
 
 **prefill = 实际输入 token ÷ 首字时间**，包含请求、调度、tokenization 与首 token 等开销，非纯 GPU 内核速度。
 本打点脚本 decode = 输出 token ÷ 首内容至流结束的时间；接受长度采用本请求原生统计。
 每点只有一个请求，DSpark 接受长度随输出内容在约 3.1–3.5 之间变化，单点 decode 用来确认可用，
 比较 decode 快慢请看下一节多请求的结果。
-[五点原始数据](results/speed-points-20261019-1017-512k.json) · [10-18 版](results/speed-points-20261018-1017-512k.json)。
+[五点原始数据](results/speed-points-20261019-engram-1017-512k.json) · [10-18 版](results/speed-points-20261018-1017-512k.json)。
 
-**满容量**：522,300 输入 + 1,024 输出（KV 池 524288）完成且正确召回，首字 139.5 秒、prefill 3,744 tok/s、
-decode 85.7 tok/s；显存峰值 72,612 MiB（共 73,415），主机最低可用内存 14 GiB，无 OOM。
-[满容量数据](results/full-capacity-522k-20261019.json)。
+**满容量**：522,300 输入 + 1,024 输出（KV 池 524288）完成且正确召回，首字 139.7 秒、prefill 3,740 tok/s、
+decode 86.5 tok/s；显存峰值 71,914 MiB（共 73,415），主机最低可用内存 14 GiB，无 OOM。
+[满容量数据](results/full-capacity-522k-20261019-engram.json)。
+
+五点文档是重复度较高的日志文本，Engram 缓存命中多；真实新文档的 prefill 受益更多：
+一份 93,149 token 的新文档整次请求 27.1 → 24.5 秒，其中 Engram 查表 5.9 → 3.4 秒
+（[数据](results/engram-prefill-93k-20261019.json)）。
 
 ## 多领域 decode
 
@@ -77,10 +81,11 @@ decode 85.7 tok/s；显存峰值 72,612 MiB（共 73,415），主机最低可用
 
 | 温度 | 10-18 版 decode tok/s（接受长度） | 本版 decode tok/s（接受长度） | 每步时间 |
 |---|---:|---:|---:|
-| 0 | 87.58（3.21） | 90.96（3.17） | 36.65 → 34.81 ms（−5.0%） |
-| 0.7 | 86.90（3.18） | 90.31（3.13） | 36.54 → 34.66 ms（−5.1%） |
+| 0 | 87.58（3.21） | 97.34（3.20） | 36.65 → 32.87 ms（−10.3%） |
+| 0.7 | 86.90（3.18） | 94.01（3.13） | 36.54 → 33.29 ms（−8.9%） |
 
-[原始数据](results/decode-multidomain-20261019.json) · 脚本 `bench/decode_multidomain.py`。
+[原始数据](results/decode-multidomain-engram-20261019.json)
+（[未含 Engram 改动的中间版本](results/decode-multidomain-20261019.json)）· 脚本 `bench/decode_multidomain.py`。
 
 ## 64K 输入＋1K 输出：1 / 2 并发
 
@@ -89,22 +94,23 @@ decode 85.7 tok/s；显存峰值 72,612 MiB（共 73,415），主机最低可用
 
 | 并发 | 平均首字 s | 每请求 prefill tok/s | 每请求 decode tok/s | 合计生成窗口 tok/s | 端到端总输出 tok/s | 接受长度 |
 |---:|---:|---:|---:|---:|---:|---:|
-| 1 | 16.31 | 4044 | 85.0 | 85.1 | 36.3 | 3.42 |
-| 2 | 26.20 | 2554 | 41.9 | 71.1 | 40.0 | 3.21 |
+| 1 | 14.23 | 4606 | 79.7 | 79.7 | 37.8 | 2.96 |
+| 2 | 24.97 | 2681 | 46.5 | 77.5 | 42.8 | 3.44 |
 
 10-18 版同一测试：1 并发 17.53 s / 3738 / 77.4 / 77.5 / 33.3（接受 3.11），
 2 并发 30.41 s / 2205 / 40.1 / 63.4 / 35.2（接受 3.08）。全部请求正确召回，无错误。
+每轮只有 2–4 个请求，decode 随接受长度波动（本轮 1 并发接受长度偏低）；decode 快慢以上节多请求结果为准。
 
 每请求 decode 按首末生成 token 的时间与 token 增量计算。
 “合计生成窗口”从本轮最早首 token 到最晚末 token，双并发包含另一请求的预填充等待；
 “端到端总输出”还包含最初的预填充。因此不能把这两列与每请求速度直接相加比较。
-两种负载的端到端总输出约为 **36.3 / 40.0 tok/s**，没有双并发解码成倍提升的结论。
+两种负载的端到端总输出约为 **37.8 / 42.8 tok/s**，没有双并发解码成倍提升的结论。
 五点与并发使用不同文档种子，两个表的 64K 数值并非同一请求。
-[并发原始数据](results/concurrency-64k1k-20261019.json) · [10-18 版](results/concurrency-64k1k-20261018.json)。
+[并发原始数据](results/concurrency-64k1k-20261019-engram.json) · [10-18 版](results/concurrency-64k1k-20261018.json)。
 
 ## 10-19 优化内容
 
-四项改动都可以用环境变量单独关闭（设为 0 即回到 10-18 的路径），lkqmoe 内核与编译库未改动。
+各项改动都可以用环境变量单独关闭（设为 0 即回到 10-18 的路径），lkqmoe 内核与编译库未改动。
 
 | 改动 | 开关（默认） | 作用 |
 |---|---|---|
@@ -112,9 +118,11 @@ decode 85.7 tok/s；显存峰值 72,612 MiB（共 73,415），主机最低可用
 | decode 验证同步 | `DS41_C128_HOST_BOUND=1` | DSpark 验证步原先为选 c128 CUDA graph 读取 GPU 上的序列长度（D2H 同步），主机必须等上一步跑完才能准备下一步。现在用调度器已知的请求长度加余量作为上界，只会选同宽或更宽（结果一致）的图；校验 2000 步无一次低于实际值。 |
 | 草稿词表头 | `DS41_DRAFT_LMHEAD_FP8=1` | 草稿每步要读一遍共享的 bf16 词表头（1.32 GB）。改为按行缩放的 FP8 副本（多占 0.66 GB），该矩阵乘 1.11 → 0.62 ms。只影响草稿提案，所有输出 token 仍由目标模型的 bf16 词表头验证。 |
 | 热专家换入节奏 | `LKQSTRATA_EVERY=2`、`LKQSTRATA_SWAPS=32` | 原为 4 / 16。决策更频繁、每窗口可换入更多，热专家命中率约 0.51–0.57 → 0.54–0.61。 |
+| Engram 提前查表 | `DS41_ENGRAM_PREFETCH=1` | Engram 第 1、14 层的行原先在走到该层时才同步查（拷 id 回主机、主机回调查缓存或读 Optane、拷回），每步 GPU 空等约 2.3 ms。哈希在每步开头就已算好，现在两层的查表在哈希后立刻各走一条侧流，与第 0 层（第 14 层则是第 2–13 层）的计算重叠；取到的行与原来完全相同，wkv 投影仍在主流。 |
+| Engram 并行读 | `DS41_ENGRAM_IO_THREADS=16` | 行存储原先每 32 行做一轮异步读，读盘实际是串行的（新文档 93K prefill 每层约 4 万轮）。现在一次查询的所有未命中合并、由 16 个常驻线程并发 O_DIRECT 读。新旧实现在真实 Engram 表上逐字节对照一致；20 万行查询 1.25 → 0.42 秒。 |
 
 多领域 decode 每步时间的拆分（温度 0 / 0.7）：前两项合计 −1.2% / −1.8%，加草稿词表头后 −3.2% / −3.2%，
-再调换入节奏后 −5.0% / −5.1%。
+再调换入节奏后 −5.0% / −5.1%，加 Engram 两项后 −10.3% / −8.9%。
 
 ## 运行方式
 
