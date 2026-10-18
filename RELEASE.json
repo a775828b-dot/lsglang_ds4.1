@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-18",
+  "date": "2026-10-19",
   "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
   "model_revision": "1bae0e1088993b9b82de08f59de5be5a34e42170",
   "lsglang_commit": "6068667581bebd2184f7e4acb46136f44837889a",
@@ -15,10 +15,15 @@
     "engram_gib": 4,
     "threads": 112,
     "hybrid_prefill_max": 6144,
-    "cpu_prefill_below": 1024
+    "cpu_prefill_below": 1024,
+    "dense_fp4_prefill_indexer": true,
+    "c128_host_length_bound": true,
+    "draft_lm_head_fp8": true,
+    "lkqstrata_every": 2,
+    "lkqstrata_swaps": 32
   },
   "validation": {
-    "framework_files_matched_to_serving_copy": 11,
+    "framework_files_matched_to_serving_copy": 14,
     "five_context_points_passed": 5,
     "concurrency_levels": [
       1,
@@ -27,12 +32,17 @@
     "concurrency_rounds_per_level": 2,
     "kernel_release_regression_passed": true,
     "static_and_cap_sts_strict_preflight_passed": true,
-    "invalid_mode_and_missing_sts_rejected": true
+    "invalid_mode_and_missing_sts_rejected": true,
+    "full_capacity_522k_no_oom": true
   },
   "api_compatibility": {
     "developer_role": "mapped to native system before preprocessing; content and order preserved",
     "encoder_regression_tests_passed": 77,
     "gateway_integration_cases_passed": 4,
     "lan_streaming_probe_passed": true
+  },
+  "previous_release": {
+    "date": "2026-10-18",
+    "commit": "0f6046b"
   }
 }

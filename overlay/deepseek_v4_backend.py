@@ -3,6 +3,7 @@ from __future__ import annotations
 import enum
 import functools
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
@@ -339,6 +340,16 @@ def two_level_decode_logits(
 
 # Arbitrary cap on one bf16 [rows, heads, lc] score chunk; transients run ~3x this.
 _TORCH_INDEXER_SCORE_BUDGET_BYTES = 128 << 20
+
+# 2026-10-19: with DS41_DENSE_FP4_INDEXER=1 long prefills keep the DeepGEMM fp4 indexer and the
+# fused top-k, run in row blocks of at most DS41_DENSE_FP4_INDEXER_MIB of [rows, lc] fp32 logits,
+# instead of falling back (budget gate below) to the torch reference, whose cost grows with
+# rows x history x heads and dominated long prefills (about 70% of a 32K chunk at 500K).
+# DS41_DENSE_FP4_INDEXER_CHECK=N compares the first N row blocks with the torch reference (log only).
+_DENSE_FP4_CHUNKED = os.environ.get("DS41_DENSE_FP4_INDEXER", "0") == "1"
+_DENSE_FP4_LOGITS_BYTES = int(os.environ.get("DS41_DENSE_FP4_INDEXER_MIB", "128")) << 20
+_DENSE_FP4_CHECK_LEFT = [int(os.environ.get("DS41_DENSE_FP4_INDEXER_CHECK", "0"))]
+_DENSE_FP4_LOGGED = set()
 
 
 class CompactCandidateMask:
@@ -3205,7 +3216,8 @@ class DeepseekV4AttnBackend(
         elif (
             self._use_dense_fp4_prefill_indexer(forward_batch)
             and _is_sm100_or_newer()
-            and self._fp4_paged_indexer_ready(layer.compress_ratio)
+            # eager prefill builds no paged indexer metadata; the row-blocked dense path needs none
+            and (_DENSE_FP4_CHUNKED or self._fp4_paged_indexer_ready(layer.compress_ratio))
         ):
             self._low_ratio_index_topk_extend(layer, x, q_lora, pos, forward_batch)
         elif is_decode_or_verify:
@@ -3234,7 +3246,10 @@ class DeepseekV4AttnBackend(
         return (
             not envs.SGLANG_DSV41_TORCH_PREFILL_INDEXER.get()
             and forward_batch.seq_lens_cpu is not None
-            and forward_batch.input_ids.numel() * max(forward_batch.seq_lens_cpu, default=0) * 4 <= _TORCH_INDEXER_SCORE_BUDGET_BYTES
+            and (
+                _DENSE_FP4_CHUNKED
+                or forward_batch.input_ids.numel() * max(forward_batch.seq_lens_cpu, default=0) * 4 <= _TORCH_INDEXER_SCORE_BUDGET_BYTES
+            )
             and _has_dense_fp4_indexer()
             and forward_batch.forward_mode.is_extend()
             and forward_batch.seq_lens_cpu is not None
@@ -3251,8 +3266,168 @@ class DeepseekV4AttnBackend(
             q_lens = forward_batch.extend_seq_lens
             q_lens_cpu = _as_int_list(forward_batch.extend_seq_lens_cpu)
         assert q_lens_cpu is not None
+        if _DENSE_FP4_CHUNKED:
+            self._low_ratio_index_topk_dense_blocked(
+                layer, x, q_lora, pos, forward_batch, q_lens_cpu
+            )
+            return
         self._low_ratio_index_topk_dense(
             layer, x, q_lora, pos, forward_batch, q_lens, q_lens_cpu
+        )
+
+    def _low_ratio_index_topk_dense_blocked(
+        self, layer, x, q_lora, pos, forward_batch, q_lens_cpu
+    ) -> None:
+        """_low_ratio_index_topk_dense per request and in row blocks, at most
+        _DENSE_FP4_LOGITS_BYTES of [rows, lc] fp32 logits at a time. Same kernel, fused
+        top-k, candidate publish / consume and output layout; each block scores its
+        request's own keys (ks = 0), so indices come out request-relative."""
+        from sglang.kernels.ops.attention.dsv4.fp4_indexer import (
+            quantize_fp4_indexer_tensor,
+        )
+
+        pool = self.token_to_kv_pool
+        core = self.forward_metadata.core_metadata
+        ratio = layer.compress_ratio
+        indexer = layer.indexer
+        page_indices = core.sparse_page_indices(ratio)
+        raw_indices = core.sparse_raw_indices(ratio)
+        page_indices.fill_(-1)
+        if raw_indices is not None:
+            raw_indices.fill_(-1)
+        seq_lens_cpu = _as_int_list(forward_batch.seq_lens_cpu)
+        assert seq_lens_cpu is not None
+        device = pos.device
+        num_tokens = pos.shape[0]
+        lc_per_req = [n // ratio for n in seq_lens_cpu]
+        empty_mask = torch.zeros(0, 0, dtype=torch.bool, device=device)
+        publish = [] if indexer.is_candidate_source else None
+        consume = indexer.uses_candidates and not indexer.is_candidate_source
+        if num_tokens == 0 or not any(lc_per_req):
+            if publish is not None:
+                self.candidate_masks = [empty_mask for _ in lc_per_req]
+            return
+        if (layer.layer_id, ratio) not in _DENSE_FP4_LOGGED:
+            _DENSE_FP4_LOGGED.add((layer.layer_id, ratio))
+            logger.info(
+                "dense fp4 prefill indexer in row blocks: layer %s ratio %s (%d MiB logits per block)",
+                layer.layer_id, ratio, _DENSE_FP4_LOGITS_BYTES >> 20,
+            )
+        q = indexer.queries(q_lora, layer.freqs_cis[pos])  # [T, H, 128] fp4 grid
+        num_heads = q.shape[1]
+        q_fp4, q_sf = quantize_fp4_indexer_tensor(q.flatten(0, 1), rne=True)
+        q_fp4 = q_fp4.view(num_tokens, num_heads, 64)
+        q_sf = q_sf.view(num_tokens, num_heads)
+        weights = indexer.head_weights(x).float()
+        compress_lens = ((pos + 1) // ratio).to(torch.int32)
+        topk = indexer.index_topk
+        unselected = torch.iinfo(torch.int32).max
+        block_size = indexer.candidate_block_size
+        req_pool_indices = forward_batch.req_pool_indices.to(torch.int64)
+        tok_start = 0
+        for b, (lc, t_len) in enumerate(zip(lc_per_req, q_lens_cpu)):
+            r0 = tok_start
+            tok_start += t_len
+            if lc == 0 or t_len == 0:
+                if publish is not None:
+                    publish.append(empty_mask)
+                continue
+            j = torch.arange(lc, device=device)
+            slots = (
+                self.req_to_token[req_pool_indices[b], j * ratio].to(torch.int64)
+                // ratio
+            )
+            k_fp4, k_sf = pool.get_low_ratio_index_k_fp4(layer.layer_id, slots)
+            # the fused top-k reads score rows through 16-byte vectors
+            width = ceil_align(lc, 4)
+            step = max(1, _DENSE_FP4_LOGITS_BYTES // (width * 4))
+            blocks = (
+                torch.empty(
+                    (t_len, (lc + block_size - 1) // block_size),
+                    dtype=torch.bool,
+                    device=device,
+                )
+                if publish is not None
+                else None
+            )
+            for off in range(0, t_len, step):
+                n = min(step, t_len - off)
+                rows = slice(r0 + off, r0 + off + n)
+                lens = compress_lens[rows]
+                zero = torch.zeros(n, dtype=torch.int32, device=device)
+                logits = _dense_fp4_mqa_logits(
+                    (q_fp4[rows], q_sf[rows]), (k_fp4, k_sf), weights[rows], zero, lens, width
+                )
+                scores = logits[:, :lc]
+                if publish is not None:
+                    # the block selection tells unreachable positions apart by -inf
+                    scores.masked_fill_(j[None, :] >= lens[:, None], -torch.inf)
+                    blocks[off : off + n] = compact_candidate_blocks(
+                        scores, lens[:, None], indexer.candidate_topk_blocks, block_size
+                    )
+                elif consume:
+                    scores.masked_fill_(
+                        ~candidate_mask_rows(self.candidate_masks[b], slice(off, off + n), lc),
+                        -torch.inf,
+                    )
+                selected = torch.empty((n, topk), dtype=torch.int32, device=device)
+                topk_transform_ragged_v2(logits, lens, out_offsets=zero, out_indices=selected)
+                if consume:
+                    selected = _mask_topk_scores(logits, selected, zero)
+                # ascending positions, padding last: the layout the consumers expect
+                selected = selected.masked_fill(selected < 0, unselected).sort(dim=-1).values
+                chosen = selected != unselected
+                page_indices[rows, :topk] = torch.where(
+                    chosen, slots[selected.clamp_max(lc - 1)], -1
+                ).to(torch.int32)
+                if raw_indices is not None:
+                    raw_indices[rows, :topk] = torch.where(chosen, selected, -1)
+                if _DENSE_FP4_CHECK_LEFT[0] > 0:
+                    _DENSE_FP4_CHECK_LEFT[0] -= 1
+                    self._dense_fp4_check(
+                        layer, indexer, q, x, rows, slots, compress_lens, logits,
+                        selected, chosen, consume, b, r0, lc, topk,
+                    )
+            if publish is not None:
+                publish.append(CompactCandidateMask(blocks, lc, block_size))
+        if publish is not None:
+            self.candidate_masks = publish
+
+    def _dense_fp4_check(
+        self, layer, indexer, q, x, rows, slots, compress_lens, logits,
+        selected, chosen, consume, b, r0, lc, topk,
+    ) -> None:
+        """Log how the block's DeepGEMM selection compares with the torch reference
+        (bf16 scores on dequantized keys) on up to 8 rows of the block."""
+        n = rows.stop - rows.start
+        pick = torch.linspace(0, n - 1, steps=min(8, n), device=q.device).long()
+        tok = pick + rows.start
+        k_deq = self.token_to_kv_pool.get_low_ratio_index_k_dequant(layer.layer_id, slots)
+        ref = indexer.scores(q[tok], k_deq, indexer.head_weights(x[tok]))
+        lens = compress_lens[tok]
+        j = torch.arange(lc, device=q.device)
+        ref.masked_fill_(j[None, :] >= lens[:, None], -torch.inf)
+        if consume:
+            ref.masked_fill_(
+                ~candidate_mask_rows(self.candidate_masks[b], tok - r0, lc), -torch.inf
+            )
+        k = min(topk, lc)
+        ref_vals, ref_idx = ref.topk(k, dim=-1)
+        mine_scores = logits[pick, :lc]
+        valid = torch.isfinite(ref) & (j[None, :] < lens[:, None])
+        rel = ((mine_scores - ref).abs() * valid).amax(dim=-1) / (
+            (ref.abs() * valid).amax(dim=-1).clamp_min(1e-6)
+        )
+        jac = []
+        for i in range(pick.numel()):
+            a = set(ref_idx[i][torch.isfinite(ref_vals[i])].tolist())
+            m = set(selected[pick[i]][chosen[pick[i]]].tolist())
+            jac.append(len(a & m) / max(1, len(a | m)))
+        logger.info(
+            "dense fp4 indexer check: layer %s ratio %s lc %d rows %d-%d consume %s: "
+            "top-k jaccard mean %.4f min %.4f, max rel score diff %.4f",
+            layer.layer_id, layer.compress_ratio, lc, rows.start, rows.stop, consume,
+            sum(jac) / len(jac), min(jac), float(rel.max()),
         )
 
     def _low_ratio_index_topk_dense(

@@ -1,0 +1,757 @@
+{
+ "note": "40 requests: 20 prompts x temperature 0 / 0.7, 768 output tokens, one at a time; step ms = accept length / decode tok/s",
+ "before_20261018": {
+  "label": "base-static",
+  "rows": [
+   {
+    "temp": 0.0,
+    "i": 0,
+    "tokens": 768,
+    "ttft": 0.479,
+    "decode_tps": 120.63,
+    "steps": 160.0,
+    "accept": 4.8
+   },
+   {
+    "temp": 0.0,
+    "i": 1,
+    "tokens": 768,
+    "ttft": 0.425,
+    "decode_tps": 74.26,
+    "steps": 292.0,
+    "accept": 2.63
+   },
+   {
+    "temp": 0.0,
+    "i": 2,
+    "tokens": 730,
+    "ttft": 0.461,
+    "decode_tps": 133.2,
+    "steps": 157.0,
+    "accept": 4.65
+   },
+   {
+    "temp": 0.0,
+    "i": 3,
+    "tokens": 768,
+    "ttft": 0.423,
+    "decode_tps": 120.59,
+    "steps": 157.0,
+    "accept": 4.892
+   },
+   {
+    "temp": 0.0,
+    "i": 4,
+    "tokens": 677,
+    "ttft": 0.464,
+    "decode_tps": 105.24,
+    "steps": 172.0,
+    "accept": 3.936
+   },
+   {
+    "temp": 0.0,
+    "i": 5,
+    "tokens": 498,
+    "ttft": 0.331,
+    "decode_tps": 61.29,
+    "steps": 256.0,
+    "accept": 1.945
+   },
+   {
+    "temp": 0.0,
+    "i": 6,
+    "tokens": 458,
+    "ttft": 0.392,
+    "decode_tps": 61.69,
+    "steps": 198.0,
+    "accept": 2.313
+   },
+   {
+    "temp": 0.0,
+    "i": 7,
+    "tokens": 768,
+    "ttft": 0.39,
+    "decode_tps": 91.85,
+    "steps": 226.0,
+    "accept": 3.398
+   },
+   {
+    "temp": 0.0,
+    "i": 8,
+    "tokens": 21,
+    "ttft": 0.417,
+    "decode_tps": 73.1,
+    "steps": 5.0,
+    "accept": 4.2
+   },
+   {
+    "temp": 0.0,
+    "i": 9,
+    "tokens": 768,
+    "ttft": 0.379,
+    "decode_tps": 131.06,
+    "steps": 161.0,
+    "accept": 4.77
+   },
+   {
+    "temp": 0.0,
+    "i": 10,
+    "tokens": 768,
+    "ttft": 0.391,
+    "decode_tps": 108.56,
+    "steps": 192.0,
+    "accept": 4.0
+   },
+   {
+    "temp": 0.0,
+    "i": 11,
+    "tokens": 768,
+    "ttft": 0.345,
+    "decode_tps": 114.12,
+    "steps": 167.0,
+    "accept": 4.599
+   },
+   {
+    "temp": 0.0,
+    "i": 12,
+    "tokens": 328,
+    "ttft": 0.336,
+    "decode_tps": 68.06,
+    "steps": 140.0,
+    "accept": 2.343
+   },
+   {
+    "temp": 0.0,
+    "i": 13,
+    "tokens": 768,
+    "ttft": 0.37,
+    "decode_tps": 65.91,
+    "steps": 309.0,
+    "accept": 2.485
+   },
+   {
+    "temp": 0.0,
+    "i": 14,
+    "tokens": 768,
+    "ttft": 0.315,
+    "decode_tps": 59.83,
+    "steps": 371.0,
+    "accept": 2.07
+   },
+   {
+    "temp": 0.0,
+    "i": 15,
+    "tokens": 768,
+    "ttft": 0.397,
+    "decode_tps": 100.41,
+    "steps": 185.0,
+    "accept": 4.151
+   },
+   {
+    "temp": 0.0,
+    "i": 16,
+    "tokens": 768,
+    "ttft": 0.348,
+    "decode_tps": 91.7,
+    "steps": 238.0,
+    "accept": 3.227
+   },
+   {
+    "temp": 0.0,
+    "i": 17,
+    "tokens": 595,
+    "ttft": 0.497,
+    "decode_tps": 101.01,
+    "steps": 146.0,
+    "accept": 4.075
+   },
+   {
+    "temp": 0.0,
+    "i": 18,
+    "tokens": 768,
+    "ttft": 0.363,
+    "decode_tps": 84.69,
+    "steps": 252.0,
+    "accept": 3.048
+   },
+   {
+    "temp": 0.0,
+    "i": 19,
+    "tokens": 768,
+    "ttft": 0.382,
+    "decode_tps": 60.84,
+    "steps": 357.0,
+    "accept": 2.151
+   },
+   {
+    "temp": 0.7,
+    "i": 0,
+    "tokens": 768,
+    "ttft": 0.47,
+    "decode_tps": 113.27,
+    "steps": 168.0,
+    "accept": 4.571
+   },
+   {
+    "temp": 0.7,
+    "i": 1,
+    "tokens": 768,
+    "ttft": 0.381,
+    "decode_tps": 74.3,
+    "steps": 298.0,
+    "accept": 2.577
+   },
+   {
+    "temp": 0.7,
+    "i": 2,
+    "tokens": 562,
+    "ttft": 0.441,
+    "decode_tps": 122.62,
+    "steps": 132.0,
+    "accept": 4.258
+   },
+   {
+    "temp": 0.7,
+    "i": 3,
+    "tokens": 768,
+    "ttft": 0.401,
+    "decode_tps": 123.35,
+    "steps": 158.0,
+    "accept": 4.861
+   },
+   {
+    "temp": 0.7,
+    "i": 4,
+    "tokens": 715,
+    "ttft": 0.418,
+    "decode_tps": 103.18,
+    "steps": 185.0,
+    "accept": 3.865
+   },
+   {
+    "temp": 0.7,
+    "i": 5,
+    "tokens": 509,
+    "ttft": 0.356,
+    "decode_tps": 64.73,
+    "steps": 245.0,
+    "accept": 2.078
+   },
+   {
+    "temp": 0.7,
+    "i": 6,
+    "tokens": 468,
+    "ttft": 0.362,
+    "decode_tps": 61.42,
+    "steps": 207.0,
+    "accept": 2.261
+   },
+   {
+    "temp": 0.7,
+    "i": 7,
+    "tokens": 768,
+    "ttft": 0.387,
+    "decode_tps": 86.97,
+    "steps": 242.0,
+    "accept": 3.174
+   },
+   {
+    "temp": 0.7,
+    "i": 8,
+    "tokens": 21,
+    "ttft": 0.378,
+    "decode_tps": 75.06,
+    "steps": 5.0,
+    "accept": 4.2
+   },
+   {
+    "temp": 0.7,
+    "i": 9,
+    "tokens": 768,
+    "ttft": 0.339,
+    "decode_tps": 131.65,
+    "steps": 163.0,
+    "accept": 4.712
+   },
+   {
+    "temp": 0.7,
+    "i": 10,
+    "tokens": 768,
+    "ttft": 0.401,
+    "decode_tps": 107.68,
+    "steps": 197.0,
+    "accept": 3.898
+   },
+   {
+    "temp": 0.7,
+    "i": 11,
+    "tokens": 768,
+    "ttft": 0.34,
+    "decode_tps": 112.47,
+    "steps": 169.0,
+    "accept": 4.544
+   },
+   {
+    "temp": 0.7,
+    "i": 12,
+    "tokens": 335,
+    "ttft": 0.307,
+    "decode_tps": 64.07,
+    "steps": 154.0,
+    "accept": 2.175
+   },
+   {
+    "temp": 0.7,
+    "i": 13,
+    "tokens": 768,
+    "ttft": 0.356,
+    "decode_tps": 71.36,
+    "steps": 280.0,
+    "accept": 2.743
+   },
+   {
+    "temp": 0.7,
+    "i": 14,
+    "tokens": 768,
+    "ttft": 0.342,
+    "decode_tps": 64.01,
+    "steps": 346.0,
+    "accept": 2.22
+   },
+   {
+    "temp": 0.7,
+    "i": 15,
+    "tokens": 768,
+    "ttft": 0.419,
+    "decode_tps": 95.18,
+    "steps": 201.0,
+    "accept": 3.821
+   },
+   {
+    "temp": 0.7,
+    "i": 16,
+    "tokens": 768,
+    "ttft": 0.329,
+    "decode_tps": 94.27,
+    "steps": 235.0,
+    "accept": 3.268
+   },
+   {
+    "temp": 0.7,
+    "i": 17,
+    "tokens": 759,
+    "ttft": 0.458,
+    "decode_tps": 97.44,
+    "steps": 197.0,
+    "accept": 3.853
+   },
+   {
+    "temp": 0.7,
+    "i": 18,
+    "tokens": 701,
+    "ttft": 0.373,
+    "decode_tps": 77.73,
+    "steps": 248.0,
+    "accept": 2.827
+   },
+   {
+    "temp": 0.7,
+    "i": 19,
+    "tokens": 768,
+    "ttft": 0.385,
+    "decode_tps": 60.76,
+    "steps": 354.0,
+    "accept": 2.169
+   }
+  ],
+  "summary": {
+   "0.0": {
+    "requests": 20,
+    "decode_tps": 87.58,
+    "accept": 3.21
+   },
+   "0.7": {
+    "requests": 20,
+    "decode_tps": 86.9,
+    "accept": 3.175
+   }
+  }
+ },
+ "after_20261019": {
+  "label": "poolD",
+  "rows": [
+   {
+    "temp": 0.0,
+    "i": 0,
+    "tokens": 768,
+    "ttft": 1.325,
+    "decode_tps": 125.48,
+    "steps": 165.0,
+    "accept": 4.655
+   },
+   {
+    "temp": 0.0,
+    "i": 1,
+    "tokens": 768,
+    "ttft": 0.38,
+    "decode_tps": 79.99,
+    "steps": 282.0,
+    "accept": 2.723
+   },
+   {
+    "temp": 0.0,
+    "i": 2,
+    "tokens": 683,
+    "ttft": 0.447,
+    "decode_tps": 138.82,
+    "steps": 148.0,
+    "accept": 4.615
+   },
+   {
+    "temp": 0.0,
+    "i": 3,
+    "tokens": 768,
+    "ttft": 0.373,
+    "decode_tps": 131.95,
+    "steps": 154.0,
+    "accept": 4.987
+   },
+   {
+    "temp": 0.0,
+    "i": 4,
+    "tokens": 672,
+    "ttft": 0.403,
+    "decode_tps": 110.42,
+    "steps": 170.0,
+    "accept": 3.953
+   },
+   {
+    "temp": 0.0,
+    "i": 5,
+    "tokens": 461,
+    "ttft": 0.507,
+    "decode_tps": 65.55,
+    "steps": 229.0,
+    "accept": 2.013
+   },
+   {
+    "temp": 0.0,
+    "i": 6,
+    "tokens": 528,
+    "ttft": 0.325,
+    "decode_tps": 70.56,
+    "steps": 211.0,
+    "accept": 2.502
+   },
+   {
+    "temp": 0.0,
+    "i": 7,
+    "tokens": 768,
+    "ttft": 0.486,
+    "decode_tps": 93.56,
+    "steps": 235.0,
+    "accept": 3.268
+   },
+   {
+    "temp": 0.0,
+    "i": 8,
+    "tokens": 21,
+    "ttft": 0.353,
+    "decode_tps": 76.91,
+    "steps": 5.0,
+    "accept": 4.2
+   },
+   {
+    "temp": 0.0,
+    "i": 9,
+    "tokens": 768,
+    "ttft": 0.318,
+    "decode_tps": 140.08,
+    "steps": 159.0,
+    "accept": 4.83
+   },
+   {
+    "temp": 0.0,
+    "i": 10,
+    "tokens": 768,
+    "ttft": 0.362,
+    "decode_tps": 111.61,
+    "steps": 196.0,
+    "accept": 3.918
+   },
+   {
+    "temp": 0.0,
+    "i": 11,
+    "tokens": 768,
+    "ttft": 0.345,
+    "decode_tps": 126.05,
+    "steps": 162.0,
+    "accept": 4.741
+   },
+   {
+    "temp": 0.0,
+    "i": 12,
+    "tokens": 454,
+    "ttft": 0.3,
+    "decode_tps": 71.44,
+    "steps": 200.0,
+    "accept": 2.27
+   },
+   {
+    "temp": 0.0,
+    "i": 13,
+    "tokens": 768,
+    "ttft": 0.32,
+    "decode_tps": 66.59,
+    "steps": 319.0,
+    "accept": 2.408
+   },
+   {
+    "temp": 0.0,
+    "i": 14,
+    "tokens": 768,
+    "ttft": 0.307,
+    "decode_tps": 62.91,
+    "steps": 366.0,
+    "accept": 2.098
+   },
+   {
+    "temp": 0.0,
+    "i": 15,
+    "tokens": 768,
+    "ttft": 0.367,
+    "decode_tps": 104.28,
+    "steps": 190.0,
+    "accept": 4.042
+   },
+   {
+    "temp": 0.0,
+    "i": 16,
+    "tokens": 768,
+    "ttft": 0.289,
+    "decode_tps": 94.74,
+    "steps": 240.0,
+    "accept": 3.2
+   },
+   {
+    "temp": 0.0,
+    "i": 17,
+    "tokens": 553,
+    "ttft": 0.407,
+    "decode_tps": 97.95,
+    "steps": 147.0,
+    "accept": 3.762
+   },
+   {
+    "temp": 0.0,
+    "i": 18,
+    "tokens": 768,
+    "ttft": 0.292,
+    "decode_tps": 85.77,
+    "steps": 259.0,
+    "accept": 2.965
+   },
+   {
+    "temp": 0.0,
+    "i": 19,
+    "tokens": 768,
+    "ttft": 0.334,
+    "decode_tps": 60.62,
+    "steps": 382.0,
+    "accept": 2.01
+   },
+   {
+    "temp": 0.7,
+    "i": 0,
+    "tokens": 768,
+    "ttft": 0.431,
+    "decode_tps": 125.96,
+    "steps": 162.0,
+    "accept": 4.741
+   },
+   {
+    "temp": 0.7,
+    "i": 1,
+    "tokens": 768,
+    "ttft": 0.306,
+    "decode_tps": 82.32,
+    "steps": 278.0,
+    "accept": 2.763
+   },
+   {
+    "temp": 0.7,
+    "i": 2,
+    "tokens": 718,
+    "ttft": 0.4,
+    "decode_tps": 127.1,
+    "steps": 171.0,
+    "accept": 4.199
+   },
+   {
+    "temp": 0.7,
+    "i": 3,
+    "tokens": 768,
+    "ttft": 0.321,
+    "decode_tps": 115.66,
+    "steps": 178.0,
+    "accept": 4.315
+   },
+   {
+    "temp": 0.7,
+    "i": 4,
+    "tokens": 751,
+    "ttft": 0.356,
+    "decode_tps": 107.24,
+    "steps": 198.0,
+    "accept": 3.793
+   },
+   {
+    "temp": 0.7,
+    "i": 5,
+    "tokens": 533,
+    "ttft": 0.287,
+    "decode_tps": 73.14,
+    "steps": 240.0,
+    "accept": 2.221
+   },
+   {
+    "temp": 0.7,
+    "i": 6,
+    "tokens": 543,
+    "ttft": 0.324,
+    "decode_tps": 63.92,
+    "steps": 245.0,
+    "accept": 2.216
+   },
+   {
+    "temp": 0.7,
+    "i": 7,
+    "tokens": 768,
+    "ttft": 0.341,
+    "decode_tps": 93.76,
+    "steps": 233.0,
+    "accept": 3.296
+   },
+   {
+    "temp": 0.7,
+    "i": 8,
+    "tokens": 21,
+    "ttft": 0.314,
+    "decode_tps": 79.92,
+    "steps": 5.0,
+    "accept": 4.2
+   },
+   {
+    "temp": 0.7,
+    "i": 9,
+    "tokens": 768,
+    "ttft": 0.302,
+    "decode_tps": 142.46,
+    "steps": 159.0,
+    "accept": 4.83
+   },
+   {
+    "temp": 0.7,
+    "i": 10,
+    "tokens": 768,
+    "ttft": 0.323,
+    "decode_tps": 111.51,
+    "steps": 196.0,
+    "accept": 3.918
+   },
+   {
+    "temp": 0.7,
+    "i": 11,
+    "tokens": 768,
+    "ttft": 0.313,
+    "decode_tps": 120.36,
+    "steps": 172.0,
+    "accept": 4.465
+   },
+   {
+    "temp": 0.7,
+    "i": 12,
+    "tokens": 381,
+    "ttft": 0.279,
+    "decode_tps": 66.9,
+    "steps": 179.0,
+    "accept": 2.128
+   },
+   {
+    "temp": 0.7,
+    "i": 13,
+    "tokens": 768,
+    "ttft": 0.299,
+    "decode_tps": 71.12,
+    "steps": 295.0,
+    "accept": 2.603
+   },
+   {
+    "temp": 0.7,
+    "i": 14,
+    "tokens": 768,
+    "ttft": 0.286,
+    "decode_tps": 61.49,
+    "steps": 377.0,
+    "accept": 2.037
+   },
+   {
+    "temp": 0.7,
+    "i": 15,
+    "tokens": 768,
+    "ttft": 0.355,
+    "decode_tps": 101.63,
+    "steps": 199.0,
+    "accept": 3.859
+   },
+   {
+    "temp": 0.7,
+    "i": 16,
+    "tokens": 768,
+    "ttft": 0.285,
+    "decode_tps": 94.2,
+    "steps": 240.0,
+    "accept": 3.2
+   },
+   {
+    "temp": 0.7,
+    "i": 17,
+    "tokens": 513,
+    "ttft": 0.395,
+    "decode_tps": 97.49,
+    "steps": 137.0,
+    "accept": 3.745
+   },
+   {
+    "temp": 0.7,
+    "i": 18,
+    "tokens": 768,
+    "ttft": 0.303,
+    "decode_tps": 86.11,
+    "steps": 262.0,
+    "accept": 2.931
+   },
+   {
+    "temp": 0.7,
+    "i": 19,
+    "tokens": 768,
+    "ttft": 0.306,
+    "decode_tps": 62.03,
+    "steps": 369.0,
+    "accept": 2.081
+   }
+  ],
+  "summary": {
+   "0.0": {
+    "requests": 20,
+    "decode_tps": 90.96,
+    "accept": 3.166
+   },
+   "0.7": {
+    "requests": 20,
+    "decode_tps": 90.31,
+    "accept": 3.13
+   }
+  }
+ }
+}

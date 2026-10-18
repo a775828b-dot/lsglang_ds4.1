@@ -12,5 +12,12 @@
   "max_running_requests": 2,
   "engram_gib": 4,
   "early_lk_moe": true,
-  "evidence": "../results/"
+  "evidence": "../results/",
+  "optimizations": {
+    "date": "2026-10-19",
+    "DS41_DENSE_FP4_INDEXER": "long prefills keep the DeepGEMM fp4 indexer + fused top-k, in row blocks",
+    "DS41_C128_HOST_BOUND": "DSpark verify picks its c128 graph from a host length bound (no D2H sync)",
+    "DS41_DRAFT_LMHEAD_FP8": "DSpark draft projects through a row-scaled FP8 copy of the LM head",
+    "LKQSTRATA_EVERY/SWAPS": "2 / 32"
+  }
 }

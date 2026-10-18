@@ -1381,9 +1381,7 @@ index 117d9f3..0476eda 100644
                      hidden_size,
                      intermediate_size_per_partition // 2,
 diff --git a/python/sglang/srt/layers/quantization/fp8_utils.py b/python/sglang/srt/layers/quantization/fp8_utils.py
-old mode 100644
-new mode 100755
-index df30113..0301b2d
+index df30113..0301b2d 100755
 --- a/python/sglang/srt/layers/quantization/fp8_utils.py
 +++ b/python/sglang/srt/layers/quantization/fp8_utils.py
 @@ -1541,6 +1541,8 @@ def flashinfer_mxfp8_blockscaled_linear(
@@ -1395,6 +1393,66 @@ index df30113..0301b2d
      input_2d = input.view(-1, input.shape[-1])
      output_shape = [*input.shape[:-1], weight.shape[0]]
  
+diff --git a/python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py b/python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py
+index 16f5622..ecccd9a 100644
+--- a/python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py
++++ b/python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py
+@@ -133,6 +133,31 @@ except ImportError:
+ 
+ logger = logging.getLogger(__name__)
+ 
++# 2026-10-19 (ds41-1017): DSpark verify batches carry no seq_lens_cpu, so the c128 bucket and the
++# candidate-graph variant were picked with seq_lens.max().item(), a D2H sync that held the host
++# until the previous step finished (host prep then ran with the GPU idle, ~4 ms a step).
++# With DS41_C128_HOST_BOUND=1 the verify path passes forward_batch.c128_len_hint, an upper
++# bound from the scheduler's request lengths; an upper bound only ever picks an equal or wider
++# (still exact) graph. DS41_C128_HOST_BOUND_CHECK=1 also syncs and logs any bound below the truth.
++_C128_HINT_CHECK = os.environ.get("DS41_C128_HOST_BOUND_CHECK", "0") == "1"
++_C128_HINT_STATS = {"checked": 0, "violations": 0}
++
++
++def _c128_len_hint(forward_batch) -> Optional[int]:
++    hint = getattr(forward_batch, "c128_len_hint", None)
++    if hint is None:   # set on the verify input before prepare_for_verify runs load_batch
++        hint = getattr(getattr(forward_batch, "spec_info", None), "c128_len_hint", None)
++    if hint is None or not _C128_HINT_CHECK:
++        return hint
++    actual = int(forward_batch.seq_lens.max().item())
++    _C128_HINT_STATS["checked"] += 1
++    if actual > hint:
++        _C128_HINT_STATS["violations"] += 1
++        logger.warning("c128 host bound %d below actual max seq_len %d", hint, actual)
++    if _C128_HINT_STATS["checked"] % 2000 == 0:
++        logger.info("c128 host bound check: %s", _C128_HINT_STATS)
++    return max(hint, actual)
++
+ if TYPE_CHECKING:
+     from sglang.srt.model_executor.model_runner import ModelRunner
+     from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+@@ -679,8 +704,9 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
+                 and lengths.device.type == "cpu"
+                 and lengths.numel() > 0
+             )
+-            if has_host_lengths:
+-                max_seq_len = int(lengths.max())
++            hint = None if has_host_lengths else _c128_len_hint(forward_batch)
++            if has_host_lengths or hint is not None:
++                max_seq_len = int(lengths.max()) if has_host_lengths else hint
+                 for variant, limit in self.candidate_graph_limits:
+                     if max_seq_len <= limit:
+                         return variant
+@@ -710,8 +736,11 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
+         if not self.enable_c128_buckets:
+             return None
+         seq_lens_cpu = getattr(forward_batch, "seq_lens_cpu", None)
++        hint = _c128_len_hint(forward_batch)
+         if seq_lens_cpu is not None and seq_lens_cpu.numel() > 0:
+             max_seq_len = int(seq_lens_cpu.max().item())
++        elif hint is not None:
++            max_seq_len = hint
+         elif forward_batch.seq_lens is not None and forward_batch.seq_lens.numel() > 0:
+             max_seq_len = int(forward_batch.seq_lens.max().item())
+         else:
 diff --git a/python/sglang/srt/models/deepseek_v4.py b/python/sglang/srt/models/deepseek_v4.py
 index 3263711..3a405d8 100644
 --- a/python/sglang/srt/models/deepseek_v4.py
@@ -1421,6 +1479,108 @@ index ad8d59e..c660cb8 100644
          wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
          if self._use_fast_kernel:
              o = torch.einsum("bgd,grd->bgr", o, wo_a)
+diff --git a/python/sglang/srt/models/dspark.py b/python/sglang/srt/models/dspark.py
+index 21861e3..3cd5e03 100644
+--- a/python/sglang/srt/models/dspark.py
++++ b/python/sglang/srt/models/dspark.py
+@@ -3,6 +3,8 @@ from __future__ import annotations
+ import logging
+ from typing import Callable, Iterable, Optional, Tuple
+ 
++import os
++
+ import torch
+ import torch.nn.functional as F
+ from torch import nn
+@@ -38,6 +40,33 @@ def gather_and_crop_vocab(
+     return full_logits[..., : int(lm_head.org_vocab_size)]
+ 
+ 
++# 2026-10-19 (ds41-1017, DS41_DRAFT_LMHEAD_FP8=1): the draft reads the shared bf16 LM head
++# (vocab x hidden, 1.32 GB) once per step on top of the target's verify. A copy in FP8 E4M3 with
++# one scale per vocab row, multiplied by torch._scaled_mm with per-token activation scales, takes
++# 0.62 ms instead of 1.11 ms on the RTX PRO 5000 (+0.66 GB). Draft proposals only: the target keeps
++# its bf16 head and verifies every token, so outputs stay the target's.
++_DRAFT_LMHEAD_FP8 = os.environ.get("DS41_DRAFT_LMHEAD_FP8", "0") == "1"
++_FP8_MAX = 448.0
++
++
++def _draft_lm_head_fp8(lm_head: nn.Module):
++    packed = getattr(lm_head, "_ds41_draft_fp8", None)
++    if packed is not None or torch.cuda.is_current_stream_capturing():
++        return packed   # never quantize inside a graph capture (bf16 path then)
++    weight = lm_head.weight.data
++    n, k = weight.shape
++    qweight = torch.empty((n, k), dtype=torch.float8_e4m3fn, device=weight.device)
++    scale = torch.empty((n, 1), dtype=torch.float32, device=weight.device)
++    for start in range(0, n, 8192):   # bounded fp32 transients
++        rows = weight[start : start + 8192].float()
++        sc = rows.abs().amax(dim=1, keepdim=True).clamp_min(1e-12) / _FP8_MAX
++        qweight[start : start + 8192] = (rows / sc).to(torch.float8_e4m3fn)
++        scale[start : start + 8192] = sc
++    lm_head._ds41_draft_fp8 = (qweight, scale.t().contiguous())
++    logger.info("DSpark draft LM head: row-scaled FP8 copy %s", tuple(qweight.shape))
++    return lm_head._ds41_draft_fp8
++
++
+ def project_through_lm_head(hidden: torch.Tensor, lm_head: nn.Module) -> torch.Tensor:
+     """Project draft hidden states through the target head; a quantized head
+     stores `weight` packed, so it needs its own kernel instead of a matmul."""
+@@ -45,6 +74,16 @@ def project_through_lm_head(hidden: torch.Tensor, lm_head: nn.Module) -> torch.T
+     if should_apply_lm_head_quant_method(lm_head, quant_method):
+         return quant_method.apply(lm_head, hidden, None)
+     weight = lm_head.weight
++    if _DRAFT_LMHEAD_FP8 and weight.dtype == torch.bfloat16:
++        packed = _draft_lm_head_fp8(lm_head)
++        if packed is not None:
++            x = hidden.reshape(-1, hidden.shape[-1]).float()
++            sx = x.abs().amax(dim=1, keepdim=True).clamp_min(1e-12) / _FP8_MAX
++            out = torch._scaled_mm(
++                (x / sx).to(torch.float8_e4m3fn), packed[0].t(),
++                scale_a=sx, scale_b=packed[1], out_dtype=torch.bfloat16,
++            )
++            return out.view(*hidden.shape[:-1], weight.shape[0])
+     return torch.matmul(hidden.to(weight.dtype), weight.T)
+ 
+ 
+diff --git a/python/sglang/srt/speculative/dspark_components/dspark_verify.py b/python/sglang/srt/speculative/dspark_components/dspark_verify.py
+index 83606b5..39f5476 100644
+--- a/python/sglang/srt/speculative/dspark_components/dspark_verify.py
++++ b/python/sglang/srt/speculative/dspark_components/dspark_verify.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import os
+ from typing import Optional
+ 
+ import msgspec
+@@ -296,6 +297,16 @@ class TargetVerifyExecutor:
+         seq_lens_cpu_backup,
+         seq_lens_sum_backup,
+     ) -> TargetVerifyResult:
++        if _C128_HOST_BOUND:
++            reqs = getattr(batch, "reqs", None)
++            if reqs:
++                # Host request lengths trail the GPU by the in-flight steps (each adds at most
++                # verify_w tokens); the slack covers far more than overlap ever keeps in flight.
++                # Set before prepare_for_verify: it runs the graph runner's load_batch, which
++                # reads the bound through the verify batch's spec_info (this verify_input).
++                verify_input.c128_len_hint = (
++                    max(req.seqlen for req in reqs) + 4 * self.verify_num_draft_tokens + 64
++                )
+         verify_forward_batch, _ = verify_input.prepare_for_verify(
+             batch, self.target_worker
+         )
+@@ -474,6 +485,9 @@ class TargetVerifyExecutor:
+         return self._verify_backend_self_adds_seq_lens_cache
+ 
+ 
++_C128_HOST_BOUND = os.environ.get("DS41_C128_HOST_BOUND", "0") == "1"
++
++
+ class CommitInjectCtx(msgspec.Struct):
+     draft_model: object
+     block_pos_offsets: torch.Tensor
 diff --git a/python/sglang/srt/utils/lk_moe_nvme_alloc.py b/python/sglang/srt/utils/lk_moe_nvme_alloc.py
 new file mode 100644
 index 0000000..c129055
