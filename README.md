@@ -3,7 +3,7 @@
 官方 **DeepSeek-V4.1-Flash-1017（MXFP4）** 单卡推理框架：RTX PRO 5000 72GB、双路 EPYC，
 **512K 共享 KV、最多 2 并发、DSpark、默认 static 验证**，附编译好的 **lkqmoe 0.5.4**。
 本页参数和速度来自 2026-10-19 午的部署：prefill 分块 22528、每层 50 个热专家槽、prefill 软件流水（6 块跨层预取）。
-速度统一用编码代理测速 `bench/agent_bench.py`（多步工具调用，上下文约 20K–180K），见下文。
+速度统一用编码代理测速 `bench/agent_bench.py`（多步工具调用，5 个会话从 64K 到约 490K，覆盖 512K KV 池），见下文。
 
 框架基于 [guqiong96/Lsglang](https://github.com/guqiong96/Lsglang)；
 lkqmoe 受该作者的 lk_moe CPU MoE 后端启发，是独立实现的通用 CPU/GPU MoE 内核，不包含 lk_moe 实现代码。
@@ -13,7 +13,7 @@ English: DeepSeek V4.1 Flash 1017 MXFP4 on one GPU, with 512K shared KV, two con
 requests, GPU-resident DSpark and the compiled lkqmoe 0.5.4 backend. The 2026-10-19 update keeps
 long prefills on the DeepGEMM FP4 indexer and takes the Engram row lookups off the decode critical path; the midday
 update uses a 22528-token prefill chunk, 50 hot-expert GPU slots per layer and lkqmoe's prefill pipeline. Speeds come
-from the coding-agent benchmark `bench/agent_bench.py` (multi-step tool use, 20K-180K context).
+from the coding-agent benchmark `bench/agent_bench.py` (multi-step tool use, five sessions from 64K to ~490K context).
 
 ## 组成
 
@@ -52,32 +52,30 @@ from the coding-agent benchmark `bench/agent_bench.py` (multi-step tool use, 20K
 `bench/agent_bench.py` 模拟编码代理会话（dsh / Claude Code 一类工具）。模型拿到一个真实代码任务，在沙箱副本里多步调用
 read_file / list_dir / grep / edit_file / write_file / check_python，工具结果回送模型，后续请求命中前缀缓存。
 沙箱内容是本仓库的 `adapter/`、`bench/` 和打过补丁的 Lsglang 源码，任务与文件完全公开，可以复现。
-4 个会话的预填上下文约 21K / 52K / 86K / 161K，对照 10-19 一次真实 dsh 会话：77 个请求，上下文 p10/50/90 为
-14K / 84K / 168K，前缀缓存命中 98.6%。每会话最多 24 步，采样用服务端默认（同 dsh，不指定温度）。
-模型写出的代码只做语法检查，不会执行。
 
-**decode（按上下文分档）**
+5 个会话的起点对齐原来的五点测速（约 64K / 128K / 256K / 384K / 480K），覆盖整个 512K KV 池：
+- 每个会话先对整段 prompt 做一次冷 prefill，之后多步调用工具，上下文继续增长。
+- 下一次请求可能超出 524288 时，会话提前结束。
+- 每会话最多 24 步，采样用服务端默认（同 dsh，不指定温度）。
+- 模型写出的代码只做语法检查，不会执行。
 
-| 上下文 | 请求数 | 输出 token | decode tok/s | 单请求中位 tok/s | DSpark 接受长度 | 每步 ms |
-|---|---:|---:|---:|---:|---:|---:|
-| ≤ 32K | 3 | 162 | 170.4 | 186.4 | 5.40 | 31.1 |
-| 32K–64K | 19 | 11,763 | 134.6 | 143.4 | 4.73 | 35.1 |
-| 64K–128K | 21 | 4,197 | 125.4 | 176.7 | 4.17 | 33.1 |
-| ≥ 128K | 9 | 3,114 | 141.5 | 161.7 | 4.94 | 34.8 |
-| **全部** | 52 | 19,236 | **133.8** | 162.5 | 4.63 | 34.5 |
+负载形态参照 10-19 一次真实 dsh 会话：77 个请求，前缀缓存命中 98.6%，大多是工具调用，夹杂长的写文件输出。
 
-**冷 prefill（每个会话第一步，整段 prompt 不命中缓存）**
+| 会话 | 上下文（起 → 止） | 冷 prefill：首字 s / tok/s | 请求数 | 输出 token | decode tok/s | DSpark 接受长度 | 每步 ms |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 64k | 66K → 80K | 15.4 / 4,306 | 15 | 5,383 | 131.2 | 4.56 | 34.6 |
+| 128k-write | 132K → 156K | 31.8 / 4,163 | 23 | 5,023 | 140.6 | 4.72 | 33.5 |
+| 256k | 265K → 400K | 65.8 / 4,022 | 24 | 1,904 | 189.0 | 5.72 | 29.9 |
+| 384k | 394K → 412K | 104.5 / 3,769 | 14 | 3,412 | 144.7 | 5.12 | 35.3 |
+| 500k | 489K → 518K | 134.1 / 3,646 | 8 | 395 | 184.4 | 5.49 | 29.1 |
+| **全部** | | | 84 | 16,117 | **143.1** | 4.86 | 33.8 |
 
-| 会话 | prompt token | 首字 s | prefill tok/s |
-|---|---:|---:|---:|
-| 20k | 21,134 | 5.4 | 3,928 |
-| 50k-write | 52,291 | 14.1 | 3,716 |
-| 85k | 86,922 | 22.0 | 3,947 |
-| 160k | 161,883 | 42.1 | 3,847 |
-
-- 后续步骤（命中前缀缓存）首字中位 **1.77 s**。
-- 输出长度 p10 / p50 / p90 为 46 / 80 / 870 token；≥ 500 token 的长输出（写文件、改代码）占输出 token 的 78%。
-- decode tok/s = 输出 token ÷ 首末流式片段间隔；接受长度 = 输出 token ÷ DSpark 验证步数；每步 ms = decode 时间 ÷ 验证步数。
+- 命中前缀缓存的后续步骤，首字中位 **2.61 s**。
+- 输出长度 p10 / p50 / p90 为 47 / 80 / 321 token；≥ 500 token 的长输出（写文件、改代码）占输出 token 的 56%。
+- 计算口径：
+  - 冷 prefill tok/s = 未命中缓存的 prompt token ÷ 首字时间。每轮测速的系统提示带有本轮编号，不会命中以前的缓存；同一轮的会话之间只共享约 1–2K token 的系统提示和工具定义。
+  - decode tok/s = 输出 token ÷ 首末流式片段间隔。
+  - 接受长度 = 输出 token ÷ DSpark 验证步数；每步 ms = decode 时间 ÷ 验证步数。
 - 接受长度随内容和采样变化，同一配置两次运行约差 ±0.4。比较配置时先看"每步 ms"，decode tok/s 是这类任务上的实际体感。
 - 旧的五点、多领域 decode 和并发测速已从仓库移除，统一用本测速。
 

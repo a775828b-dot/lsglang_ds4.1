@@ -1,10 +1,11 @@
 """agent_bench: coding-agent benchmark for the DeepSeek V4.1 Flash 1017 server (OpenAI API, tools, streaming).
 
-Shaped like a real coding-agent (dsh / Claude Code style) session measured through our gateway on 2026-10-19:
-77 requests, context p10/50/90 14K/84K/168K, 98.6% prefix-cache hits, mostly tool calls with short reasoning and
-some long file writes. Each session gives the model a coding task on a sandbox copy of real code (this repository's
-adapter/ and bench/, and the patched Lsglang sources), a history of earlier read_file calls that brings the prompt to
-its target size, and OpenAI tools. The model then works as an agent for up to --steps requests: its tool calls run
+Shaped like a real coding-agent (dsh / Claude Code style) session measured through our gateway on 2026-10-19
+(77 requests, 98.6% prefix-cache hits, mostly tool calls with short reasoning and some long file writes), and spread
+over the whole 512K KV pool: five sessions start at about 64K, 128K, 256K, 384K and 480K tokens (the old five-point
+grid). Each session gives the model a coding task on a sandbox copy of real code (this repository's adapter/ and
+bench/, and the patched Lsglang sources), a history of earlier read_file calls that brings the prompt to its target
+size, and OpenAI tools. The model then works as an agent for up to --steps requests: its tool calls run
 against the sandbox and the results go back, so every later request re-reads a cached prefix.
 
 Tools: read_file / list_dir / grep / edit_file / write_file / check_python (py_compile only). Nothing the model
@@ -12,11 +13,11 @@ writes is executed; every path stays inside the per-session sandbox (a temp dire
 
 Per request: TTFT, output tokens, decode tok/s (first to last streamed chunk), DSpark verify steps (/metrics delta),
 accept length and ms per verify step. The first request of each session is a cold prefill of the whole prompt
-(prefill tok/s = prompt tokens / TTFT). Accept length follows the content and the sampling, so compare
+(prefill tok/s = uncached prompt tokens / TTFT; every run starts its system prompt with its own id). A session ends early when its next request could exceed --context-limit. Accept length follows the content and the sampling, so compare
 configurations by "ms per step" first; decode tok/s is what a user sees on this kind of task.
 
 Usage: agent_bench.py LABEL --tokenizer MODEL_DIR --lsglang PATCHED_LSGLANG [--repo THIS_REPO] [--url URL]
-       [--sessions 20k,50k-write,85k,160k] [--steps 24] [--temperature T] [--seed N] [--out FILE] [--dry-run]
+       [--sessions 64k,128k-write,256k,384k,500k] [--steps 24] [--temperature T] [--seed N] [--out FILE] [--dry-run]
 Default sampling is the server's (the agent sent no temperature)."""
 import argparse, json, os, re, shutil, statistics as st, sys, tempfile, time, urllib.request
 from pathlib import Path
@@ -25,6 +26,7 @@ URL = 'http://127.0.0.1:39504'
 MODEL = 'DeepSeek-V4.1-Flash-1017'
 SRT = 'python/sglang/srt'
 ARGS = None
+RUN_ID = f'{time.time_ns():x}'   # starts the system prompt: no prefix-cache reuse across runs
 # Sandbox contents: (root key, path under it, sandbox directory, file pattern). The task files (adapter/, bench/)
 # and the large real sources that pad the history to the target context (sglang/srt/...).
 TREES = [
@@ -66,30 +68,36 @@ TOOLS = [
 
 # (target context tokens, task, files read in the pre-filled history: small task files first, then padding)
 SESSIONS = {
-    '20k': (20_000,
+    '64k': (64_000,
             '给 adapter/early_lk_moe.py 的逐层交接加统计：记录已交接的层数和每层交接耗时（秒），提供模块级函数 stats() '
             '返回汇总（层数、总耗时、最慢的层及其耗时），不要改变交接逻辑和调用顺序。再写一个不依赖 GPU 的单元测试 '
             'bench/test_early_lk_moe_stats.py，用假的 FusedMoE 类和 mock 覆盖统计逻辑。相关文件上文已读过，最多再读 3 个文件就开始修改。',
             ['adapter/early_lk_moe.py', 'adapter/sitecustomize.py']),
-    '50k-write': (50_000,
-                  '为 bench/agent_bench.py 里的 Sandbox 类写一份完整的 pytest 单元测试文件 bench/test_agent_bench_sandbox.py：'
-                  '覆盖 read_file（含 start_line/end_line）、list_dir、grep、edit_file（唯一、零次、多次匹配）、write_file、'
-                  'check_python（通过与语法错误）以及路径越界拒绝，至少 12 个用例，用 tmp_path 构造文件，不依赖 GPU 和网络。'
-                  '相关代码上文已读过，直接用 write_file 写出完整文件，再用 check_python 检查。',
-                  ['bench/agent_bench.py', 'adapter/early_lk_moe.py', 'sglang/srt/managers/schedule_batch.py']),
-    '85k': (85_000,
-            '阅读 adapter/engram_backend.py 里 Engram 提前查表（prefetch）相关代码，找出多请求并发或 CUDA graph 重放时'
-            '可能出现的竞态或缓冲区复用问题。对你确认的问题用 edit_file 给出最小修复，并在修改处加注释说明原因。'
-            '相关文件上文已读过，最多再读 3 个文件就开始修改。',
-            ['adapter/engram_backend.py', 'sglang/srt/layers/logits_processor.py', 'sglang/srt/managers/schedule_batch.py',
-             'sglang/srt/managers/scheduler.py']),
-    '160k': (160_000,
+    '128k-write': (128_000,
+                   '为 bench/agent_bench.py 里的 Sandbox 类写一份完整的 pytest 单元测试文件 bench/test_agent_bench_sandbox.py：'
+                   '覆盖 read_file（含 start_line/end_line）、list_dir、grep、edit_file（唯一、零次、多次匹配）、write_file、'
+                   'check_python（通过与语法错误）以及路径越界拒绝，至少 12 个用例，用 tmp_path 构造文件，不依赖 GPU 和网络。'
+                   '相关代码上文已读过，直接用 write_file 写出完整文件，再用 check_python 检查。',
+                   ['bench/agent_bench.py', 'adapter/early_lk_moe.py', 'sglang/srt/managers/schedule_batch.py']),
+    '256k': (256_000,
+             '阅读 adapter/engram_backend.py 里 Engram 提前查表（prefetch）相关代码，找出多请求并发或 CUDA graph 重放时'
+             '可能出现的竞态或缓冲区复用问题。对你确认的问题用 edit_file 给出最小修复，并在修改处加注释说明原因。'
+             '相关文件上文已读过，最多再读 3 个文件就开始修改。',
+             ['adapter/engram_backend.py', 'sglang/srt/layers/logits_processor.py', 'sglang/srt/managers/schedule_batch.py',
+              'sglang/srt/managers/scheduler.py']),
+    '384k': (384_000,
              '重构 bench/agent_bench.py 的汇总部分：把 summarize 拆成按上下文分档和按会话两个函数，新增每个会话的'
              '冷启动首字与后续首字中位数，增加 --json-only 参数只输出 JSON；保持命令行和结果 JSON 现有字段兼容。'
              '相关文件上文已读过，最多再读 3 个文件就开始修改。',
              ['bench/agent_bench.py', 'sglang/srt/models/deepseek_v4.py', 'sglang/srt/managers/scheduler.py',
               'sglang/srt/managers/schedule_batch.py', 'sglang/srt/layers/logits_processor.py',
               'sglang/srt/model_executor/model_runner.py']),
+    '500k': (480_000,
+             '整理 adapter/sitecustomize.py 和 adapter/ds1017_quant.py：给所有函数补全类型注解和中文文档字符串，'
+             '把 sitecustomize.py 里读取的环境变量开关整理成文件顶部的一张常量表（名称、默认值、含义），不要改变任何行为。'
+             '两个文件上文已读过，直接用 edit_file 修改，完成后用 check_python 检查。',
+             ['adapter/sitecustomize.py', 'adapter/ds1017_quant.py', 'sglang/srt/models/deepseek_v4.py',
+              'sglang/srt/managers/scheduler.py']),
 }
 
 
@@ -170,7 +178,7 @@ class Sandbox:
 
 def history(sb, task, files, target, tok):
     """System + task + pre-filled read_file calls until the prompt reaches about `target` tokens."""
-    msgs = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': task}]
+    msgs = [{'role': 'system', 'content': f'（测速运行 {RUN_ID}）' + SYSTEM}, {'role': 'user', 'content': task}]
     used = len(tok.encode(SYSTEM + task + json.dumps(TOOLS, ensure_ascii=False)).ids)
     pool = list(files) + sorted(str(p.relative_to(sb.root)) for p in (sb.root / 'sglang').rglob('*.py'))
     seen = set()
@@ -265,6 +273,8 @@ def run_session(name, args, tok):
                   f'{row["step_ms"]} ms/step tools {row["tool_calls"]}', flush=True)
             if not calls:
                 break
+            # context guard: the next request = this prompt + this answer + the tool results + its own answer
+            grown = row['prompt_tokens'] + row['output_tokens']
             tcs = []
             for i, c in sorted(calls.items()):
                 cid = c['id'] or f'call_{step}_{i}'
@@ -277,6 +287,10 @@ def run_session(name, args, tok):
                 except json.JSONDecodeError as e:
                     result = f'参数不是合法 JSON：{e}'
                 msgs.append({'role': 'tool', 'tool_call_id': t['id'], 'content': str(result)[:60000]})
+                grown += len(tok.encode(msgs[-1]['content']).ids) + 64
+            if grown + args.max_tokens + 1024 > args.context_limit:
+                print(f'[{name}] context guard: next request ~{grown} tokens, stopping the session', flush=True)
+                break
         return rows
     finally:
         sb.close()
@@ -294,16 +308,26 @@ def summarize(rows):
                     accept=round(sum(r['output_tokens'] for r in rs) / steps, 3),
                     ms_per_step=round(1000 * secs / steps, 2))
     out = dict(all=agg(rows))
-    for lo, hi in ((0, 32768), (32768, 65536), (65536, 131072), (131072, 1 << 30)):
+    for lo, hi in ((0, 98304), (98304, 196608), (196608, 327680), (327680, 458752), (458752, 1 << 30)):
         a = agg([r for r in rows if lo <= (r['prompt_tokens'] or 0) < hi])
         if a:
             out[f'ctx_{lo // 1024}k_{hi // 1024 if hi < (1 << 30) else "max"}'] = a
+    out['sessions'] = {}
+    for name in dict.fromkeys(r['session'] for r in rows):
+        rs = [r for r in rows if r['session'] == name]
+        a = agg(rs)
+        if a:
+            ctx = [r['prompt_tokens'] or 0 for r in rs]
+            a.update(ctx_start=min(ctx), ctx_end=max(ctx), steps=len(rs))
+            out['sessions'][name] = a
     later = [r['ttft_s'] for r in rows if r['step'] > 0]
     out['ttft_first_s'] = [r['ttft_s'] for r in rows if r['step'] == 0]
     out['ttft_later_median_s'] = round(st.median(later), 2) if later else None
     out['tool_call_requests'] = sum(1 for r in rows if r['tool_calls'])
-    out['cold_prefill'] = [dict(session=r['session'], prompt_tokens=r['prompt_tokens'], ttft_s=r['ttft_s'],
-                                prefill_tps=round(r['prompt_tokens'] / r['ttft_s'], 1) if r['ttft_s'] else None)
+    out['cold_prefill'] = [dict(session=r['session'], prompt_tokens=r['prompt_tokens'], cached_tokens=r['cached_tokens'] or 0,
+                                ttft_s=r['ttft_s'],
+                                prefill_tps=round((r['prompt_tokens'] - (r['cached_tokens'] or 0)) / r['ttft_s'], 1)
+                                if r['ttft_s'] else None)
                            for r in rows if r['step'] == 0]
     outs = sorted(r['output_tokens'] for r in rows)
     out['output_tokens_p10_p50_p90'] = [outs[int(q * (len(outs) - 1))] for q in (0.1, 0.5, 0.9)] if outs else None
@@ -320,7 +344,8 @@ def main():
     p.add_argument('--repo', default=str(Path(__file__).resolve().parents[1]), help='this repository (adapter/, bench/)')
     p.add_argument('--lsglang', default=os.environ.get('LSGLANG'), help='Lsglang source with the 1017 patch applied')
     p.add_argument('--out', default=None, help='result JSON (default: agent-bench-LABEL.json in the current directory)')
-    p.add_argument('--sessions', default='20k,50k-write,85k,160k')
+    p.add_argument('--sessions', default='64k,128k-write,256k,384k,500k')
+    p.add_argument('--context-limit', type=int, default=524288, help='server context / KV pool (tokens)')
     p.add_argument('--steps', type=int, default=24)
     p.add_argument('--max-tokens', type=int, default=4096)
     p.add_argument('--temperature', type=float, default=None)

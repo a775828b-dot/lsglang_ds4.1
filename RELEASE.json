@@ -35,39 +35,107 @@
     "prefill_pipeline_bitwise_identical": true,
     "full_capacity_522k_vram_peak_mib": 72758,
     "agent_bench": {
-      "sessions": 4,
-      "requests": 52,
-      "output_tokens": 19236,
-      "decode_tps": 133.8,
-      "accept": 4.633,
-      "ms_per_step": 34.54,
+      "sessions": 5,
+      "requests": 84,
+      "output_tokens": 16117,
+      "decode_tps": 143.1,
+      "accept": 4.862,
+      "ms_per_step": 33.79,
+      "per_session": {
+        "64k": {
+          "requests": 15,
+          "output_tokens": 5383,
+          "decode_tps": 131.2,
+          "median_request_tps": 175.2,
+          "accept": 4.558,
+          "ms_per_step": 34.65,
+          "ctx_start": 66347,
+          "ctx_end": 80443,
+          "steps": 15
+        },
+        "128k-write": {
+          "requests": 23,
+          "output_tokens": 5023,
+          "decode_tps": 140.6,
+          "median_request_tps": 188.9,
+          "accept": 4.725,
+          "ms_per_step": 33.45,
+          "ctx_start": 132216,
+          "ctx_end": 155719,
+          "steps": 23
+        },
+        "256k": {
+          "requests": 24,
+          "output_tokens": 1904,
+          "decode_tps": 189.0,
+          "median_request_tps": 192.3,
+          "accept": 5.718,
+          "ms_per_step": 29.88,
+          "ctx_start": 264658,
+          "ctx_end": 399802,
+          "steps": 24
+        },
+        "384k": {
+          "requests": 14,
+          "output_tokens": 3412,
+          "decode_tps": 144.7,
+          "median_request_tps": 175.4,
+          "accept": 5.123,
+          "ms_per_step": 35.26,
+          "ctx_start": 393876,
+          "ctx_end": 412052,
+          "steps": 14
+        },
+        "500k": {
+          "requests": 8,
+          "output_tokens": 395,
+          "decode_tps": 184.4,
+          "median_request_tps": 200.5,
+          "accept": 5.486,
+          "ms_per_step": 29.15,
+          "ctx_start": 488875,
+          "ctx_end": 517698,
+          "steps": 8
+        }
+      },
       "cold_prefill": [
         {
-          "session": "20k",
-          "prompt_tokens": 21134,
-          "ttft_s": 5.381,
-          "prefill_tps": 3927.5
+          "session": "64k",
+          "prompt_tokens": 66347,
+          "cached_tokens": 0,
+          "ttft_s": 15.408,
+          "prefill_tps": 4306.0
         },
         {
-          "session": "50k-write",
-          "prompt_tokens": 52291,
-          "ttft_s": 14.07,
-          "prefill_tps": 3716.5
+          "session": "128k-write",
+          "prompt_tokens": 132216,
+          "cached_tokens": 0,
+          "ttft_s": 31.763,
+          "prefill_tps": 4162.6
         },
         {
-          "session": "85k",
-          "prompt_tokens": 86922,
-          "ttft_s": 22.022,
-          "prefill_tps": 3947.1
+          "session": "256k",
+          "prompt_tokens": 264658,
+          "cached_tokens": 0,
+          "ttft_s": 65.807,
+          "prefill_tps": 4021.7
         },
         {
-          "session": "160k",
-          "prompt_tokens": 161883,
-          "ttft_s": 42.082,
-          "prefill_tps": 3846.8
+          "session": "384k",
+          "prompt_tokens": 393876,
+          "cached_tokens": 0,
+          "ttft_s": 104.515,
+          "prefill_tps": 3768.6
+        },
+        {
+          "session": "500k",
+          "prompt_tokens": 488875,
+          "cached_tokens": 0,
+          "ttft_s": 134.087,
+          "prefill_tps": 3646.0
         }
       ],
-      "ttft_later_median_s": 1.77
+      "ttft_later_median_s": 2.61
     }
   },
   "api_compatibility": {
@@ -78,6 +146,6 @@
   },
   "previous_release": {
     "date": "2026-10-19",
-    "commit": "cf5593d"
+    "commit": "17ac5e4"
   }
 }
