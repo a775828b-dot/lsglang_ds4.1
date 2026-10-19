@@ -3,8 +3,8 @@
   "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
   "model_revision": "1bae0e1088993b9b82de08f59de5be5a34e42170",
   "lsglang_commit": "6068667581bebd2184f7e4acb46136f44837889a",
-  "lkqmoe_version": "0.5.4",
-  "lkqmoe_source_commit": "9cbeb6c7a8a3bd2fc36ced525004450eb3a1dee5",
+  "lkqmoe_version": "0.5.5",
+  "lkqmoe_source_commit": "191b8863332dd1e2a21a6ef27cd459a2d406544d",
   "defaults": {
     "verify_mode": "static",
     "main_resident_layers": 0,
@@ -23,7 +23,8 @@
     "lkqstrata_swaps": 32,
     "engram_prefetch": true,
     "engram_io_threads": 16,
-    "prefill_pipeline_prefetch_chunks": 6
+    "prefill_pipeline_prefetch_chunks": 6,
+    "lkqmoe_down_grain": 24
   },
   "validation": {
     "framework_files_matched_to_serving_copy": 14,
@@ -36,106 +37,135 @@
     "full_capacity_522k_vram_peak_mib": 72758,
     "agent_bench": {
       "sessions": 5,
-      "requests": 84,
-      "output_tokens": 16117,
-      "decode_tps": 143.1,
-      "accept": 4.862,
-      "ms_per_step": 33.79,
+      "requests": 82,
+      "output_tokens": 20597,
+      "decode_tps": 140.7,
+      "accept": 4.732,
+      "ms_per_step": 33.49,
       "per_session": {
         "64k": {
-          "requests": 15,
-          "output_tokens": 5383,
-          "decode_tps": 131.2,
-          "median_request_tps": 175.2,
-          "accept": 4.558,
-          "ms_per_step": 34.65,
-          "ctx_start": 66347,
-          "ctx_end": 80443,
-          "steps": 15
-        },
-        "128k-write": {
-          "requests": 23,
-          "output_tokens": 5023,
-          "decode_tps": 140.6,
-          "median_request_tps": 188.9,
-          "accept": 4.725,
-          "ms_per_step": 33.45,
-          "ctx_start": 132216,
-          "ctx_end": 155719,
-          "steps": 23
-        },
-        "256k": {
           "requests": 24,
-          "output_tokens": 1904,
-          "decode_tps": 189.0,
-          "median_request_tps": 192.3,
-          "accept": 5.718,
-          "ms_per_step": 29.88,
-          "ctx_start": 264658,
-          "ctx_end": 399802,
+          "output_tokens": 8695,
+          "decode_tps": 147.6,
+          "median_request_tps": 166.7,
+          "accept": 5.009,
+          "ms_per_step": 33.83,
+          "ctx_start": 66345,
+          "ctx_end": 94717,
           "steps": 24
         },
+        "128k-write": {
+          "requests": 15,
+          "output_tokens": 5531,
+          "decode_tps": 136.9,
+          "median_request_tps": 165.9,
+          "accept": 4.56,
+          "ms_per_step": 33.23,
+          "ctx_start": 132214,
+          "ctx_end": 146710,
+          "steps": 15
+        },
+        "256k": {
+          "requests": 18,
+          "output_tokens": 5049,
+          "decode_tps": 125.3,
+          "median_request_tps": 151.8,
+          "accept": 4.341,
+          "ms_per_step": 34.52,
+          "ctx_start": 264656,
+          "ctx_end": 297327,
+          "steps": 18
+        },
         "384k": {
-          "requests": 14,
-          "output_tokens": 3412,
-          "decode_tps": 144.7,
-          "median_request_tps": 175.4,
-          "accept": 5.123,
-          "ms_per_step": 35.26,
-          "ctx_start": 393876,
-          "ctx_end": 412052,
-          "steps": 14
+          "requests": 19,
+          "output_tokens": 1003,
+          "decode_tps": 192.1,
+          "median_request_tps": 194.5,
+          "accept": 5.451,
+          "ms_per_step": 27.84,
+          "ctx_start": 393874,
+          "ctx_end": 510994,
+          "steps": 19
         },
         "500k": {
-          "requests": 8,
-          "output_tokens": 395,
-          "decode_tps": 184.4,
-          "median_request_tps": 200.5,
-          "accept": 5.486,
-          "ms_per_step": 29.15,
-          "ctx_start": 488875,
-          "ctx_end": 517698,
-          "steps": 8
+          "requests": 6,
+          "output_tokens": 319,
+          "decode_tps": 211.1,
+          "median_request_tps": 210.2,
+          "accept": 5.596,
+          "ms_per_step": 26.02,
+          "ctx_start": 488873,
+          "ctx_end": 515796,
+          "steps": 6
         }
       },
       "cold_prefill": [
         {
           "session": "64k",
-          "prompt_tokens": 66347,
+          "prompt_tokens": 66345,
           "cached_tokens": 0,
-          "ttft_s": 15.408,
-          "prefill_tps": 4306.0
+          "ttft_s": 21.597,
+          "prefill_tps": 3072.0
         },
         {
           "session": "128k-write",
-          "prompt_tokens": 132216,
+          "prompt_tokens": 132214,
           "cached_tokens": 0,
-          "ttft_s": 31.763,
-          "prefill_tps": 4162.6
+          "ttft_s": 33.52,
+          "prefill_tps": 3944.3
         },
         {
           "session": "256k",
-          "prompt_tokens": 264658,
+          "prompt_tokens": 264656,
           "cached_tokens": 0,
-          "ttft_s": 65.807,
-          "prefill_tps": 4021.7
+          "ttft_s": 68.289,
+          "prefill_tps": 3875.5
         },
         {
           "session": "384k",
-          "prompt_tokens": 393876,
+          "prompt_tokens": 393874,
           "cached_tokens": 0,
-          "ttft_s": 104.515,
-          "prefill_tps": 3768.6
+          "ttft_s": 105.263,
+          "prefill_tps": 3741.8
         },
         {
           "session": "500k",
-          "prompt_tokens": 488875,
+          "prompt_tokens": 488873,
           "cached_tokens": 0,
-          "ttft_s": 134.087,
-          "prefill_tps": 3646.0
+          "ttft_s": 134.037,
+          "prefill_tps": 3647.3
         }
       ],
-      "ttft_later_median_s": 2.61
+      "ttft_later_median_s": 2.28,
+      "note": "first long request after a restart in the 64k session; warm recheck in results/agent-bench-20261019-prefill-recheck.json",
+      "cold_prefill_warm_recheck": [
+        {
+          "session": "64k",
+          "prompt_tokens": 66345,
+          "cached_tokens": 0,
+          "ttft_s": 15.576,
+          "prefill_tps": 4259.4
+        },
+        {
+          "session": "128k-write",
+          "prompt_tokens": 132214,
+          "cached_tokens": 0,
+          "ttft_s": 31.618,
+          "prefill_tps": 4181.6
+        }
+      ]
+    },
+    "lkqmoe_down_r4_bitwise_identical": true,
+    "lkqmoe_down_ab": {
+      "file": "results/lkqmoe-down-ab-20261019.json",
+      "ms_per_step_t0": [
+        32.6,
+        31.5
+      ],
+      "ms_per_step_t07": [
+        32.4,
+        31.5
+      ]
     }
   },
   "api_compatibility": {
@@ -146,6 +176,6 @@
   },
   "previous_release": {
     "date": "2026-10-19",
-    "commit": "17ac5e4"
+    "commit": "641931f"
   }
 }

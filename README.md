@@ -1,8 +1,8 @@
 # DeepSeek V4.1 Flash 1017 · Lsglang + lkqmoe
 
 官方 **DeepSeek-V4.1-Flash-1017（MXFP4）** 单卡推理框架：RTX PRO 5000 72GB、双路 EPYC，
-**512K 共享 KV、最多 2 并发、DSpark、默认 static 验证**，附编译好的 **lkqmoe 0.5.4**。
-本页参数和速度来自 2026-10-19 午的部署：prefill 分块 22528、每层 50 个热专家槽、prefill 软件流水（6 块跨层预取）。
+**512K 共享 KV、最多 2 并发、DSpark、默认 static 验证**，附编译好的 **lkqmoe 0.5.5**。
+本页参数和速度来自 2026-10-19 的部署：prefill 分块 22528、每层 50 个热专家槽、prefill 软件流水（6 块跨层预取）；晚间换上 lkqmoe 0.5.5（CPU Down 一次读一行，decode 每步约快 3%，输出逐位不变）。
 速度统一用编码代理测速 `bench/agent_bench.py`（多步工具调用，5 个会话从 64K 到约 490K，覆盖 512K KV 池），见下文。
 
 框架基于 [guqiong96/Lsglang](https://github.com/guqiong96/Lsglang)；
@@ -10,9 +10,10 @@ lkqmoe 受该作者的 lk_moe CPU MoE 后端启发，是独立实现的通用 CP
 核心源码保留在私有仓库，本仓库提供编译包及开源框架适配。
 
 English: DeepSeek V4.1 Flash 1017 MXFP4 on one GPU, with 512K shared KV, two concurrent
-requests, GPU-resident DSpark and the compiled lkqmoe 0.5.4 backend. The 2026-10-19 update keeps
+requests, GPU-resident DSpark and the compiled lkqmoe 0.5.5 backend. The 2026-10-19 update keeps
 long prefills on the DeepGEMM FP4 indexer and takes the Engram row lookups off the decode critical path; the midday
-update uses a 22528-token prefill chunk, 50 hot-expert GPU slots per layer and lkqmoe's prefill pipeline. Speeds come
+update uses a 22528-token prefill chunk, 50 hot-expert GPU slots per layer and lkqmoe's prefill pipeline; the evening
+update ships lkqmoe 0.5.5, whose CPU Down kernel reads one weight row per stream (decode step about -3%, bitwise identical). Speeds come
 from the coding-agent benchmark `bench/agent_bench.py` (multi-step tool use, five sessions from 64K to ~490K context).
 
 ## 组成
@@ -23,7 +24,7 @@ from the coding-agent benchmark `bench/agent_bench.py` (multi-step tool use, fiv
 | Lsglang 基线 | `6068667581bebd2184f7e4acb46136f44837889a` |
 | 1017 框架补丁 | `patches/lsglang-6068667-1017.patch`（14 个文件），含官方会话编码、block-32 激活量化、Engram 与 DSpark 调整，以及 10-19 的 decode 验证免同步和草稿词表头 FP8 |
 | 运行时覆盖 | `overlay/`（含 10-19 的 prefill 索引器分块）；Engram 行存储（10-19 起提前查表、并行读）、量化和按层提前加载在 `adapter/` |
-| lkqmoe | 0.5.4（10-19 的更新均未改动内核与编译库）；源码提交 `9cbeb6c7a8a3bd2fc36ced525004450eb3a1dee5`；4 个动态库、Python 3.12 字节码、GPU 适配和热专家排名种子 |
+| lkqmoe | 0.5.5（10-19 晚：AVX512 库用 `-DLKQMOE_DOWN_R4=1` 编译，CPU Down 每次读一行，配合启动脚本的 `LKQMOE_DOWN_GRAIN=24`；其余 3 个库与 0.5.4 相同）；源码提交 `191b8863332dd1e2a21a6ef27cd459a2d406544d`；4 个动态库、Python 3.12 字节码、GPU 适配和热专家排名种子 |
 | 启动入口 | `launch/run-ds41-1017.sh` |
 | 依赖 | `requirements-lock.txt`；附本次使用的 FlashInfer 0.6.18 和 b12x 1.3.0 轮子 |
 | 实测与完整性 | `results/`、`SHA256SUMS` |
@@ -63,21 +64,35 @@ read_file / list_dir / grep / edit_file / write_file / check_python，工具结�
 
 | 会话 | 上下文（起 → 止） | 冷 prefill：首字 s / tok/s | 请求数 | 输出 token | decode tok/s | DSpark 接受长度 | 每步 ms |
 |---|---|---:|---:|---:|---:|---:|---:|
-| 64k | 66K → 80K | 15.4 / 4,306 | 15 | 5,383 | 131.2 | 4.56 | 34.6 |
-| 128k-write | 132K → 156K | 31.8 / 4,163 | 23 | 5,023 | 140.6 | 4.72 | 33.5 |
-| 256k | 265K → 400K | 65.8 / 4,022 | 24 | 1,904 | 189.0 | 5.72 | 29.9 |
-| 384k | 394K → 412K | 104.5 / 3,769 | 14 | 3,412 | 144.7 | 5.12 | 35.3 |
-| 500k | 489K → 518K | 134.1 / 3,646 | 8 | 395 | 184.4 | 5.49 | 29.1 |
-| **全部** | | | 84 | 16,117 | **143.1** | 4.86 | 33.8 |
+| 64k | 66K → 95K | 21.6 / 3,072 | 24 | 8,695 | 147.6 | 5.01 | 33.8 |
+| 128k-write | 132K → 147K | 33.5 / 3,944 | 15 | 5,531 | 136.9 | 4.56 | 33.2 |
+| 256k | 265K → 297K | 68.3 / 3,876 | 18 | 5,049 | 125.3 | 4.34 | 34.5 |
+| 384k | 394K → 511K | 105.3 / 3,742 | 19 | 1,003 | 192.1 | 5.45 | 27.8 |
+| 500k | 489K → 516K | 134.0 / 3,647 | 6 | 319 | 211.1 | 5.60 | 26.0 |
+| **全部** | | | 82 | 20,597 | **140.7** | 4.73 | 33.5 |
 
-- 命中前缀缓存的后续步骤，首字中位 **2.61 s**。
-- 输出长度 p10 / p50 / p90 为 47 / 80 / 321 token；≥ 500 token 的长输出（写文件、改代码）占输出 token 的 56%。
+- 命中前缀缓存的后续步骤，首字中位 **2.28 s**。
+- 本轮在 WebUI 启动后立即开跑，64k 会话是重启后的第一个长请求，冷 prefill 带一次性开销（21.6 s / 3,072 tok/s）。缓存热了以后复测：64K 15.6 s / 4,259 tok/s，128K 31.6 s / 4,182 tok/s（`results/agent-bench-20261019-prefill-recheck.json`），和 0.5.4 时相同。
+- 输出长度 p10 / p50 / p90 为 48 / 61 / 630 token；≥ 500 token 的长输出（写文件、改代码）占输出 token 的 64%。
 - 计算口径：
   - 冷 prefill tok/s = 未命中缓存的 prompt token ÷ 首字时间。每轮测速的系统提示带有本轮编号，不会命中以前的缓存；同一轮的会话之间只共享约 1–2K token 的系统提示和工具定义。
   - decode tok/s = 输出 token ÷ 首末流式片段间隔。
   - 接受长度 = 输出 token ÷ DSpark 验证步数；每步 ms = decode 时间 ÷ 验证步数。
 - 接受长度随内容和采样变化，同一配置两次运行约差 ±0.4。比较配置时先看"每步 ms"，decode tok/s 是这类任务上的实际体感。
 - 旧的五点、多领域 decode 和并发测速已从仓库移除，统一用本测速。
+
+### lkqmoe 0.5.5 前后（2026-10-19 晚）
+
+上表是 0.5.5 的结果；0.5.4 时为 decode 143.1 tok/s、每步 33.8 ms。两次运行的内容、接受长度和各会话的输出量都不同（每步耗时随上下文长度变化），所以 agent_bench 不用来比较内核。
+内核本身用同日、同一组多领域提示（20 个 × 温度 0 / 0.7，单请求）对比，先测新版再换回旧版：
+
+| 温度 | 0.5.4 每步 ms | 0.5.5 每步 ms | decode tok/s |
+|---|---:|---:|---:|
+| 0 | 32.6 | 31.5 | 97.8 → 99.8 |
+| 0.7 | 32.4 | 31.5 | 96.1 → 98.2 |
+
+- 原因：DeepSeek V4.1 的 Down 权重每行只有 1152 字节，原内核一次交错读 4 行，读内存比 Gate 慢约 30%；改为一行一条流，并把动态领取粒度设为 24 行后，CPU Down 快 15% 到 17%，整次 CPU 专家调用快约 6%。输出逐位不变。
+- 每次调用的耗时（按 token 数分）见 `results/lkqmoe-down-ab-20261019.json`。
 
 [原始数据](results/agent-bench-20261019.json)
 

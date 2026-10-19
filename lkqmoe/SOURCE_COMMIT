@@ -1,1 +1,1 @@
-lkqmoe 0.5.4 / 9cbeb6c7a8a3bd2fc36ced525004450eb3a1dee5 / generic NVFP4 + MXFP4
+lkqmoe 0.5.5 / 191b8863332dd1e2a21a6ef27cd459a2d406544d / generic NVFP4 + MXFP4; liblkqmoe_avx512.so built with -DLKQMOE_DOWN_R4=1, other libraries from 0.5.4

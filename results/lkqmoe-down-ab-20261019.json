@@ -1,0 +1,113 @@
+{
+ "date": "2026-10-19",
+ "lkqmoe": "0.5.4 (old) vs 0.5.5 -DLKQMOE_DOWN_R4=1 + LKQMOE_DOWN_GRAIN=24 (new)",
+ "bitwise_identical": true,
+ "offline_probe": "layer 21, 384 real experts, 112 threads, production m mix: Down -14.7%, whole CPU call -6.1%",
+ "online_same_day": {
+  "benchmark": "20 multi-domain prompts x temperature 0 / 0.7, 768 tokens, one request at a time",
+  "decode": {
+   "old": {
+    "0.0": {
+     "requests": 20,
+     "decode_tps": 97.77,
+     "accept": 3.186
+    },
+    "0.7": {
+     "requests": 20,
+     "decode_tps": 96.13,
+     "accept": 3.114
+    }
+   },
+   "new": {
+    "0.0": {
+     "requests": 20,
+     "decode_tps": 99.83,
+     "accept": 3.141
+    },
+    "0.7": {
+     "requests": 20,
+     "decode_tps": 98.15,
+     "accept": 3.095
+    }
+   }
+  },
+  "cpu_call_by_m": {
+   "old": {
+    "1": {
+     "calls": 12269,
+     "wall_us": 109.7,
+     "gate_us": 56.4,
+     "down_us": 35.3
+    },
+    "2": {
+     "calls": 22866,
+     "wall_us": 170.1,
+     "gate_us": 88.3,
+     "down_us": 57.1
+    },
+    "3": {
+     "calls": 36658,
+     "wall_us": 231.5,
+     "gate_us": 122.9,
+     "down_us": 80.8
+    },
+    "4": {
+     "calls": 54714,
+     "wall_us": 303.3,
+     "gate_us": 164.1,
+     "down_us": 108.6
+    },
+    "5": {
+     "calls": 77787,
+     "wall_us": 393.9,
+     "gate_us": 218.1,
+     "down_us": 144.1
+    },
+    "6": {
+     "calls": 133192,
+     "wall_us": 531.3,
+     "gate_us": 316.4,
+     "down_us": 210.2
+    }
+   },
+   "new": {
+    "1": {
+     "calls": 12631,
+     "wall_us": 93.2,
+     "gate_us": 44.7,
+     "down_us": 25.1
+    },
+    "2": {
+     "calls": 23023,
+     "wall_us": 161.0,
+     "gate_us": 80.2,
+     "down_us": 45.7
+    },
+    "3": {
+     "calls": 37143,
+     "wall_us": 224.9,
+     "gate_us": 118.6,
+     "down_us": 67.2
+    },
+    "4": {
+     "calls": 55577,
+     "wall_us": 291.6,
+     "gate_us": 161.9,
+     "down_us": 91.4
+    },
+    "5": {
+     "calls": 78167,
+     "wall_us": 372.2,
+     "gate_us": 216.5,
+     "down_us": 121.7
+    },
+    "6": {
+     "calls": 130311,
+     "wall_us": 495.6,
+     "gate_us": 312.7,
+     "down_us": 178.1
+    }
+   }
+  }
+ }
+}

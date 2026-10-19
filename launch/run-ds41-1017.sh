@@ -115,6 +115,7 @@ export LKQMOE_DOWN_PRECISION=tf32 LKQMOE_PREFILL_TILE_M=64 LKQMOE_GATE_BN=128 LK
 export LKQMOE_THP=0                 # no MADV_HUGEPAGE on the expert shards (compaction stalls at load)
 export LKQMOE_DOWN_BF16=1           # BF16 Down dot products on CPU (finer than the reference FP8 activations)
 export LKQMOE_DYNAMIC=2             # guided dynamic row scheduling (bitwise identical to the static split)
+export LKQMOE_DOWN_GRAIN=24         # 24-row dynamic Down claims, for the one-row Down build of lkqmoe 0.5.5 (bitwise identical)
 export LKQMOE_FP8_CONFIGS=1         # tuned SM120 configs for the Triton block-FP8 GEMM
 export LKQMOE_DS41_WO_A_TRITON=1    # decode wo_a on the Triton grouped einsum
 export LKQMOE_DS41_WO_A_FP8=1       # keep wo_a in the checkpoint's FP8 (exact, 1.25 GiB less VRAM); 0 = BF16

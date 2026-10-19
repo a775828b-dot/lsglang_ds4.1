@@ -1,6 +1,6 @@
 {
-  "version": "0.5.4",
-  "source_commit": "9cbeb6c7a8a3bd2fc36ced525004450eb3a1dee5",
+  "version": "0.5.5",
+  "source_commit": "191b8863332dd1e2a21a6ef27cd459a2d406544d",
   "source_repository": "https://github.com/a775828b-dot/Lkq_moe",
   "python_abi": "3.12",
   "platform": "Linux x86_64",
@@ -8,5 +8,6 @@
     "AVX512-BF16/VBMI",
     "AVX2/FMA"
   ],
-  "validation": "../results/kernel-release-validation.json"
+  "validation": "../results/kernel-release-validation.json",
+  "avx512_build": "-DLKQMOE_DOWN_R4=1: one-row CPU Down microkernel for DeepSeek V4.1 1017 (research/mxfp4/DOWN_R4.md); liblkqmoe.so, liblkqmoe_avx2.so and liblkqmoe_cuda.so are the 0.5.4 builds (their code is unchanged)"
 }
