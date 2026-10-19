@@ -8,10 +8,10 @@
   "defaults": {
     "verify_mode": "static",
     "main_resident_layers": 0,
-    "lkqstrata_slots": 43,
+    "lkqstrata_slots": 50,
     "max_running_requests": 2,
     "kv_tokens": 524288,
-    "batch_tokens": 32768,
+    "batch_tokens": 22528,
     "engram_gib": 4,
     "threads": 112,
     "hybrid_prefill_max": 6144,
@@ -22,21 +22,53 @@
     "lkqstrata_every": 2,
     "lkqstrata_swaps": 32,
     "engram_prefetch": true,
-    "engram_io_threads": 16
+    "engram_io_threads": 16,
+    "prefill_pipeline_prefetch_chunks": 6
   },
   "validation": {
     "framework_files_matched_to_serving_copy": 14,
-    "five_context_points_passed": 5,
-    "concurrency_levels": [
-      1,
-      2
-    ],
-    "concurrency_rounds_per_level": 2,
     "kernel_release_regression_passed": true,
     "static_and_cap_sts_strict_preflight_passed": true,
     "invalid_mode_and_missing_sts_rejected": true,
     "full_capacity_522k_no_oom": true,
-    "engram_row_store_ab_identical": true
+    "engram_row_store_ab_identical": true,
+    "prefill_pipeline_bitwise_identical": true,
+    "full_capacity_522k_vram_peak_mib": 72758,
+    "agent_bench": {
+      "sessions": 4,
+      "requests": 52,
+      "output_tokens": 19236,
+      "decode_tps": 133.8,
+      "accept": 4.633,
+      "ms_per_step": 34.54,
+      "cold_prefill": [
+        {
+          "session": "20k",
+          "prompt_tokens": 21134,
+          "ttft_s": 5.381,
+          "prefill_tps": 3927.5
+        },
+        {
+          "session": "50k-write",
+          "prompt_tokens": 52291,
+          "ttft_s": 14.07,
+          "prefill_tps": 3716.5
+        },
+        {
+          "session": "85k",
+          "prompt_tokens": 86922,
+          "ttft_s": 22.022,
+          "prefill_tps": 3947.1
+        },
+        {
+          "session": "160k",
+          "prompt_tokens": 161883,
+          "ttft_s": 42.082,
+          "prefill_tps": 3846.8
+        }
+      ],
+      "ttft_later_median_s": 1.77
+    }
   },
   "api_compatibility": {
     "developer_role": "mapped to native system before preprocessing; content and order preserved",
@@ -45,7 +77,7 @@
     "lan_streaming_probe_passed": true
   },
   "previous_release": {
-    "date": "2026-10-18",
-    "commit": "0f6046b"
+    "date": "2026-10-19",
+    "commit": "cf5593d"
   }
 }

@@ -20,14 +20,23 @@ VERIFY_MODE=${VERIFY_MODE:-static}
 STS_CALIBRATION=${STS_CALIBRATION:-$REPO/config/dspark-sts-calib.json}
 
 # ---- settings used for the published numbers --------------------------------------------
-# 1017: all 40 target MoE layers use CPU plus 43 hot-expert slots per layer.
+# 1017: all 40 target MoE layers use CPU plus GPU hot-expert slots (50 per layer at the default batch).
 # Draft layers stay on GPU. Two requests share the 512K KV pool.
 LKQSTRATA=${LKQSTRATA:-1}
-LKQSTRATA_SLOTS=${LKQSTRATA_SLOTS:-43}
 MAIN_LAYERS=${MAIN_LAYERS:-0}
 RESIDENT_START=${RESIDENT_START:-0}
 ENGRAM_CACHE_GIB=${ENGRAM_CACHE_GIB:-4}
-BATCH_TOKENS=${BATCH_TOKENS:-32768}    # chunked prefill size
+BATCH_TOKENS=${BATCH_TOKENS:-22528}    # chunked prefill size (2026-10-19; was 32768)
+# A smaller prefill chunk needs less VRAM (~0.5 GiB per 1K tokens at 500K context), spent on hot-expert slots.
+# Slots per batch size, each leaving >= 0.5 GiB at the 522K+1K peak on the 72 GB card (KV 512K):
+# 22528 -> 50 (default), 20480 -> 52, 32768 -> 43 (measured), 24576 -> 47 (estimate); others 43.
+case "$BATCH_TOKENS" in 20480) auto_slots=52 ;; 22528) auto_slots=50 ;; 24576) auto_slots=47 ;; *) auto_slots=43 ;; esac
+LKQSTRATA_SLOTS=${LKQSTRATA_SLOTS:-$auto_slots}
+# lkqmoe prefill pipeline: FP4 unpack and uploads on their own streams, the next layer's first N expert chunks
+# uploaded during this layer's tail and the next attention layer. Bitwise identical; prefill +7-9% with N=6 at
+# batch 22528 (+0.75 GiB at 522K). Only the validated batch gets it by default; 0 = off.
+case "$BATCH_TOKENS" in 22528) auto_prefetch=6 ;; *) auto_prefetch=0 ;; esac
+PREFILL_PREFETCH_CHUNKS=${PREFILL_PREFETCH_CHUNKS:-$auto_prefetch}
 KV_TOKENS=${KV_TOKENS:-524288}         # context; pools above 786432 need LKQMOE_DS41_SPLIT_ZERO=1 (set below)
 MAX_REQUESTS=${MAX_REQUESTS:-2}
 GPU_MEMORY=${GPU_MEMORY:-0.95}
@@ -114,6 +123,9 @@ export LKQMOE_DS41_SPLIT_ZERO=1      # zero the reserved page of the SM120 page-
 export LKQSTRATA="$LKQSTRATA" LKQSTRATA_SLOTS="$LKQSTRATA_SLOTS" LKQSTRATA_PROFILE="$lkq/lkqstrata-ds41-1017.json"
 export LKQSTRATA_ADAPT=1 LKQSTRATA_LOG=500 LKQMOE_THREADS="$LKQ_THREADS"
 export LKQSTRATA_EVERY=${LKQSTRATA_EVERY:-2} LKQSTRATA_SWAPS=${LKQSTRATA_SWAPS:-32}   # policy round / swap budget (2026-10-19; was 4 / 16)
+if [[ "$PREFILL_PREFETCH_CHUNKS" -gt 0 ]]; then
+  export LKQMOE_PREFILL_OVERLAP=1 LKQMOE_PREFILL_PREFETCH_CHUNKS="$PREFILL_PREFETCH_CHUNKS"
+fi
 if [[ "$LKQ_THREADS" == 112 ]]; then
   export LKQMOE_THREADS=112 LKQMOE_PROBE_DISPATCH_CPU=95 LKQMOE_MAIN_CPUS=76-79,92-94,108-111,124-127
 else
@@ -127,7 +139,7 @@ fi
 (cd "$LSGLANG" && sha256sum --check --quiet "$REPO/patches/framework-files.sha256")
 (cd "$REPO" && sha256sum --check --quiet SHA256SUMS)
 if [[ "${CHECK_ONLY:-0}" == 1 ]]; then
-  printf 'CONFIG model=%s mode=%s main_layers=%s slots=%s kv=%s requests=%s early=%s\n' "$MODEL" "$SGLANG_RAGGED_VERIFY_MODE" "$MAIN_LAYERS" "$LKQSTRATA_SLOTS" "$KV_TOKENS" "$MAX_REQUESTS" "$DS41_EARLY_LK_MOE"
+  printf 'CONFIG model=%s mode=%s main_layers=%s slots=%s kv=%s requests=%s early=%s batch=%s prefetch=%s\n' "$MODEL" "$SGLANG_RAGGED_VERIFY_MODE" "$MAIN_LAYERS" "$LKQSTRATA_SLOTS" "$KV_TOKENS" "$MAX_REQUESTS" "$DS41_EARLY_LK_MOE" "$BATCH_TOKENS" "$PREFILL_PREFETCH_CHUNKS"
   printf 'SPEC '; printf '%q ' "${spec_args[@]}"; printf '\n'
   exit 0
 fi

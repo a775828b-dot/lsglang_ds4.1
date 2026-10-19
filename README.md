@@ -2,8 +2,8 @@
 
 官方 **DeepSeek-V4.1-Flash-1017（MXFP4）** 单卡推理框架：RTX PRO 5000 72GB、双路 EPYC，
 **512K 共享 KV、最多 2 并发、DSpark、默认 static 验证**，附编译好的 **lkqmoe 0.5.4**。
-本页参数和速度来自 2026-10-19 的 1017 优化版部署：长上下文 prefill 不再随长度下跌，
-500K 首字 252 → 131 秒，decode 每步快约 10%。10-18 版数据保留在 `results/` 作对照。
+本页参数和速度来自 2026-10-19 午的部署：prefill 分块 22528、每层 50 个热专家槽、prefill 软件流水（6 块跨层预取）。
+速度统一用编码代理测速 `bench/agent_bench.py`（多步工具调用，上下文约 20K–180K），见下文。
 
 框架基于 [guqiong96/Lsglang](https://github.com/guqiong96/Lsglang)；
 lkqmoe 受该作者的 lk_moe CPU MoE 后端启发，是独立实现的通用 CPU/GPU MoE 内核，不包含 lk_moe 实现代码。
@@ -11,8 +11,9 @@ lkqmoe 受该作者的 lk_moe CPU MoE 后端启发，是独立实现的通用 CP
 
 English: DeepSeek V4.1 Flash 1017 MXFP4 on one GPU, with 512K shared KV, two concurrent
 requests, GPU-resident DSpark and the compiled lkqmoe 0.5.4 backend. The 2026-10-19 update keeps
-long prefills on the DeepGEMM FP4 indexer (500K first token 252 s → 131 s), takes the Engram row
-lookups off the decode critical path and trims about 10% off each decode step.
+long prefills on the DeepGEMM FP4 indexer and takes the Engram row lookups off the decode critical path; the midday
+update uses a 22528-token prefill chunk, 50 hot-expert GPU slots per layer and lkqmoe's prefill pipeline. Speeds come
+from the coding-agent benchmark `bench/agent_bench.py` (multi-step tool use, 20K-180K context).
 
 ## 组成
 
@@ -22,7 +23,7 @@ lookups off the decode critical path and trims about 10% off each decode step.
 | Lsglang 基线 | `6068667581bebd2184f7e4acb46136f44837889a` |
 | 1017 框架补丁 | `patches/lsglang-6068667-1017.patch`（14 个文件），含官方会话编码、block-32 激活量化、Engram 与 DSpark 调整，以及 10-19 的 decode 验证免同步和草稿词表头 FP8 |
 | 运行时覆盖 | `overlay/`（含 10-19 的 prefill 索引器分块）；Engram 行存储（10-19 起提前查表、并行读）、量化和按层提前加载在 `adapter/` |
-| lkqmoe | 0.5.4；源码提交 `9cbeb6c7a8a3bd2fc36ced525004450eb3a1dee5`；4 个动态库、Python 3.12 字节码、GPU 适配和热专家排名种子 |
+| lkqmoe | 0.5.4（10-19 的更新均未改动内核与编译库）；源码提交 `9cbeb6c7a8a3bd2fc36ced525004450eb3a1dee5`；4 个动态库、Python 3.12 字节码、GPU 适配和热专家排名种子 |
 | 启动入口 | `launch/run-ds41-1017.sh` |
 | 依赖 | `requirements-lock.txt`；附本次使用的 FlashInfer 0.6.18 和 b12x 1.3.0 轮子 |
 | 实测与完整性 | `results/`、`SHA256SUMS` |
@@ -34,10 +35,10 @@ lookups off the decode critical path and trims about 10% off each decode step.
 | CPU | 2× EPYC 9334，64 核 / 128 线程，NPS2、4 个 NUMA 节点 |
 | 内存 / GPU | 320 GB DDR5；RTX PRO 5000 72GB Blackwell（SM120） |
 | 模型存储 | 三星 990 PRO；Engram 位于低延迟 Optane NVMe |
-| 主模型专家 | 0 层整层常驻；40 层各使用 CPU + 43 个 LKQstrata GPU 热专家槽，自适应替换（每 2 个窗口一轮，每窗口最多换入 32 个） |
+| 主模型专家 | 0 层整层常驻；40 层各使用 CPU + 50 个 LKQstrata GPU 热专家槽（分块 32768 时为 43），自适应替换（每 2 个窗口一轮，每窗口最多换入 32 个） |
 | DSpark | 3 层草稿常驻 GPU；块大小 5、每步验证 6 token；static |
 | KV / 并发 | 524288 token，共享池最多 2 请求 |
-| 预填充分块 / 显存比例 | 32768 / 0.95 |
+| 预填充分块 / 显存比例 | 22528 / 0.95；prefill 软件流水，6 块跨层预取 |
 | Engram / CPU | 行缓存 4 GiB；112 线程、BF16 Down、动态调度 |
 | 预填充切换阈值 | hybrid 上限 6144，CPU 阈值 1024 |
 | 其他 | FP8 KV、FP4 indexer（prefill 也走 DeepGEMM）、SWA 尾部有界重放 |
@@ -46,67 +47,44 @@ lookups off the decode critical path and trims about 10% off each decode step.
 每层 CPU 专家加载完成后立即交给 lkqmoe 并释放临时 scratch；`DS41_EARLY_LK_MOE=1` 默认开启。
 本机一次完整 static 启动约 **310–330 秒**；权重加载记录约 **200 秒**，耗时会随页缓存和存储状态变化。
 
-## 512K 容量内五点测速
+## 测速：编码代理（agent_bench）
 
-温度 0，每点输出 1024 token，独立长会话文档，事实埋在约 10% 深度；文档与 10-18 版逐字相同。
-**5/5 正确召回，全部输出 1024 token，无请求错误。** 表内是实际输入长度；最大点是 499961 输入，
-本轮没有把该点描述为精确填满 524288。
+`bench/agent_bench.py` 模拟编码代理会话（dsh / Claude Code 一类工具）。模型拿到一个真实代码任务，在沙箱副本里多步调用
+read_file / list_dir / grep / edit_file / write_file / check_python，工具结果回送模型，后续请求命中前缀缓存。
+沙箱内容是本仓库的 `adapter/`、`bench/` 和打过补丁的 Lsglang 源码，任务与文件完全公开，可以复现。
+4 个会话的预填上下文约 21K / 52K / 86K / 161K，对照 10-19 一次真实 dsh 会话：77 个请求，上下文 p10/50/90 为
+14K / 84K / 168K，前缀缓存命中 98.6%。每会话最多 24 步，采样用服务端默认（同 dsh，不指定温度）。
+模型写出的代码只做语法检查，不会执行。
 
-| 实际输入 token | 首字时间 s | prefill tok/s | decode tok/s | 接受长度 | 10-18 版首字 s / prefill tok/s |
-|---:|---:|---:|---:|---:|---:|
-| 65,524 | 15.04 | 4,356 | 87.6 | 3.29 | 17.90 / 3,661 |
-| 131,076 | 29.83 | 4,394 | 85.5 | 3.23 | 44.25 / 2,962 |
-| 262,113 | 61.35 | 4,272 | 93.2 | 3.57 | 98.53 / 2,660 |
-| 393,206 | 96.91 | 4,058 | 83.6 | 3.28 | 173.67 / 2,264 |
-| 499,961 | 131.14 | 3,812 | 78.9 | 3.01 | 252.07 / 1,983 |
+**decode（按上下文分档）**
 
-**prefill = 实际输入 token ÷ 首字时间**，包含请求、调度、tokenization 与首 token 等开销，非纯 GPU 内核速度。
-本打点脚本 decode = 输出 token ÷ 首内容至流结束的时间；接受长度采用本请求原生统计。
-每点只有一个请求，DSpark 接受长度随输出内容在约 3.1–3.5 之间变化，单点 decode 用来确认可用，
-比较 decode 快慢请看下一节多请求的结果。
-[五点原始数据](results/speed-points-20261019-engram-1017-512k.json) · [10-18 版](results/speed-points-20261018-1017-512k.json)。
+| 上下文 | 请求数 | 输出 token | decode tok/s | 单请求中位 tok/s | DSpark 接受长度 | 每步 ms |
+|---|---:|---:|---:|---:|---:|---:|
+| ≤ 32K | 3 | 162 | 170.4 | 186.4 | 5.40 | 31.1 |
+| 32K–64K | 19 | 11,763 | 134.6 | 143.4 | 4.73 | 35.1 |
+| 64K–128K | 21 | 4,197 | 125.4 | 176.7 | 4.17 | 33.1 |
+| ≥ 128K | 9 | 3,114 | 141.5 | 161.7 | 4.94 | 34.8 |
+| **全部** | 52 | 19,236 | **133.8** | 162.5 | 4.63 | 34.5 |
 
-**满容量**：522,300 输入 + 1,024 输出（KV 池 524288）完成且正确召回，首字 139.7 秒、prefill 3,740 tok/s、
-decode 86.5 tok/s；显存峰值 71,914 MiB（共 73,415），主机最低可用内存 14 GiB，无 OOM。
-[满容量数据](results/full-capacity-522k-20261019-engram.json)。
+**冷 prefill（每个会话第一步，整段 prompt 不命中缓存）**
 
-五点文档是重复度较高的日志文本，Engram 缓存命中多；真实新文档的 prefill 受益更多：
-一份 93,149 token 的新文档整次请求 27.1 → 24.5 秒，其中 Engram 查表 5.9 → 3.4 秒
-（[数据](results/engram-prefill-93k-20261019.json)）。
-
-## 多领域 decode
-
-20 条固定提示（代码、数学、写作、问答，中英文），温度 0 和 0.7 各一遍，每条输出 768 token，单请求依次运行。
-每步时间 = 接受长度 ÷ decode 速度，排除了接受长度波动。
-
-| 温度 | 10-18 版 decode tok/s（接受长度） | 本版 decode tok/s（接受长度） | 每步时间 |
+| 会话 | prompt token | 首字 s | prefill tok/s |
 |---|---:|---:|---:|
-| 0 | 87.58（3.21） | 97.34（3.20） | 36.65 → 32.87 ms（−10.3%） |
-| 0.7 | 86.90（3.18） | 94.01（3.13） | 36.54 → 33.29 ms（−8.9%） |
+| 20k | 21,134 | 5.4 | 3,928 |
+| 50k-write | 52,291 | 14.1 | 3,716 |
+| 85k | 86,922 | 22.0 | 3,947 |
+| 160k | 161,883 | 42.1 | 3,847 |
 
-[原始数据](results/decode-multidomain-engram-20261019.json)
-（[未含 Engram 改动的中间版本](results/decode-multidomain-20261019.json)）· 脚本 `bench/decode_multidomain.py`。
+- 后续步骤（命中前缀缓存）首字中位 **1.77 s**。
+- 输出长度 p10 / p50 / p90 为 46 / 80 / 870 token；≥ 500 token 的长输出（写文件、改代码）占输出 token 的 78%。
+- decode tok/s = 输出 token ÷ 首末流式片段间隔；接受长度 = 输出 token ÷ DSpark 验证步数；每步 ms = decode 时间 ÷ 验证步数。
+- 接受长度随内容和采样变化，同一配置两次运行约差 ±0.4。比较配置时先看"每步 ms"，decode tok/s 是这类任务上的实际体感。
+- 旧的五点、多领域 decode 和并发测速已从仓库移除，统一用本测速。
 
-## 64K 输入＋1K 输出：1 / 2 并发
+[原始数据](results/agent-bench-20261019.json)
 
-每请求严格 65536 输入、1024 输出，温度 0，各两轮，缓存命中均为 0。
-双并发同时提交，已确认两个请求的解码时间实际重叠。
-
-| 并发 | 平均首字 s | 每请求 prefill tok/s | 每请求 decode tok/s | 合计生成窗口 tok/s | 端到端总输出 tok/s | 接受长度 |
-|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 14.23 | 4606 | 79.7 | 79.7 | 37.8 | 2.96 |
-| 2 | 24.97 | 2681 | 46.5 | 77.5 | 42.8 | 3.44 |
-
-10-18 版同一测试：1 并发 17.53 s / 3738 / 77.4 / 77.5 / 33.3（接受 3.11），
-2 并发 30.41 s / 2205 / 40.1 / 63.4 / 35.2（接受 3.08）。全部请求正确召回，无错误。
-每轮只有 2–4 个请求，decode 随接受长度波动（本轮 1 并发接受长度偏低）；decode 快慢以上节多请求结果为准。
-
-每请求 decode 按首末生成 token 的时间与 token 增量计算。
-“合计生成窗口”从本轮最早首 token 到最晚末 token，双并发包含另一请求的预填充等待；
-“端到端总输出”还包含最初的预填充。因此不能把这两列与每请求速度直接相加比较。
-两种负载的端到端总输出约为 **37.8 / 42.8 tok/s**，没有双并发解码成倍提升的结论。
-五点与并发使用不同文档种子，两个表的 64K 数值并非同一请求。
-[并发原始数据](results/concurrency-64k1k-20261019-engram.json) · [10-18 版](results/concurrency-64k1k-20261018.json)。
+**满容量验证（不是测速）**：522,300 输入 + 1,024 输出（KV 池 524288）完成且正确召回；
+显存峰值 72,758 MiB（共 73,415），余量 0.64 GiB，主机最低可用 14 GiB，无 OOM（[数据](results/capacity-522k-20261019.json)）。
 
 ## 10-19 优化内容
 
@@ -119,10 +97,10 @@ decode 86.5 tok/s；显存峰值 71,914 MiB（共 73,415），主机最低可用
 | 草稿词表头 | `DS41_DRAFT_LMHEAD_FP8=1` | 草稿每步要读一遍共享的 bf16 词表头（1.32 GB）。改为按行缩放的 FP8 副本（多占 0.66 GB），该矩阵乘 1.11 → 0.62 ms。只影响草稿提案，所有输出 token 仍由目标模型的 bf16 词表头验证。 |
 | 热专家换入节奏 | `LKQSTRATA_EVERY=2`、`LKQSTRATA_SWAPS=32` | 原为 4 / 16。决策更频繁、每窗口可换入更多，热专家命中率约 0.51–0.57 → 0.54–0.61。 |
 | Engram 提前查表 | `DS41_ENGRAM_PREFETCH=1` | Engram 第 1、14 层的行原先在走到该层时才同步查（拷 id 回主机、主机回调查缓存或读 Optane、拷回），每步 GPU 空等约 2.3 ms。哈希在每步开头就已算好，现在两层的查表在哈希后立刻各走一条侧流，与第 0 层（第 14 层则是第 2–13 层）的计算重叠；取到的行与原来完全相同，wkv 投影仍在主流。 |
+| 分块与热专家槽 | `BATCH_TOKENS=22528`（槽数按分块自动选：22528 → 50） | prefill 临时显存随分块大小变化（500K 上下文时每 1K 分块约 0.5 GiB），省出的显存放热专家：每层 43 → 50 槽。22528 是让 64K 输入切成 3 块的最小整页分块（每块有约 3 秒与块大小无关的专家上传开销）。 |
+| prefill 软件流水 | `PREFILL_PREFETCH_CHUNKS=6`（分块 22528 时默认，0 关闭） | lkqmoe 自带的流水：FP4 解包和上传各走独立流，本层最后几块一解包完就开始上传下一层的前 6 块，与下一层注意力重叠。逐位一致；prefill 约 +7~9%，522K 峰值多约 0.75 GiB。 |
 | Engram 并行读 | `DS41_ENGRAM_IO_THREADS=16` | 行存储原先每 32 行做一轮异步读，读盘实际是串行的（新文档 93K prefill 每层约 4 万轮）。现在一次查询的所有未命中合并、由 16 个常驻线程并发 O_DIRECT 读。新旧实现在真实 Engram 表上逐字节对照一致；20 万行查询 1.25 → 0.42 秒。 |
 
-多领域 decode 每步时间的拆分（温度 0 / 0.7）：前两项合计 −1.2% / −1.8%，加草稿词表头后 −3.2% / −3.2%，
-再调换入节奏后 −5.0% / −5.1%，加 Engram 两项后 −10.3% / −8.9%。
 
 ## 运行方式
 
@@ -175,11 +153,11 @@ Python 字节码固定为 3.12。当前整模型验收限于上述单卡硬件�
 ## 测速命令
 
 ```sh
-"$VENV/bin/python" bench/speed_points.py --port 39504   --model DeepSeek-V4.1-Flash-1017 --tokenizer "$MODEL"   --points 65536,131072,262144,393216,500000 --output 1024   --exact --stop-on-fail --out results/new-five-points.json
-PYTHONPATH="$LSGLANG/python" "$VENV/bin/python" bench/concurrency64k.py   --model-path "$MODEL" --port 39504 --rounds 2   --input-tokens 65536 --output-tokens 1024 --out results/new-concurrency.json
-python3 bench/decode_multidomain.py new --port 39504 --out results/new-decode-multidomain.json
+"$VENV/bin/python" bench/agent_bench.py mytest --tokenizer "$MODEL" --lsglang "$LSGLANG" \
+  --url http://127.0.0.1:39504 --out results/agent-bench-mytest.json
 ```
 
+`--dry-run` 只构建沙箱和历史、不发请求；`--sessions`、`--steps`、`--temperature`、`--seed` 可调。需要 `tokenizers`（Lsglang 环境已带）。
 性能测试避免并行其他推理负载或编译。当前 SWA bounded replay 不支持提示词 logprob / PPL 测试；
 相关完整修复尚未移植。本文速度数据是文本推理及事实召回结果。
 
