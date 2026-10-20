@@ -1,0 +1,144 @@
+{
+ "date": "2026-10-20",
+ "what": "DSpark variable-length verify (compact) vs static, same day, production settings",
+ "decode_concurrency1": {
+  "static": {
+   "0.0": {
+    "requests": 20,
+    "decode_tps": 101.33,
+    "accept": 3.178
+   },
+   "0.7": {
+    "requests": 20,
+    "decode_tps": 99.19,
+    "accept": 3.135
+   }
+  },
+  "compact": {
+   "0.0": {
+    "requests": 20,
+    "decode_tps": 104.42,
+    "accept": 3.018
+   },
+   "0.7": {
+    "requests": 20,
+    "decode_tps": 98.41,
+    "accept": 2.865
+   }
+  }
+ },
+ "decode_concurrency2": {
+  "static": {
+   "label": "static",
+   "tok_s": 100.1,
+   "tokens": 26677,
+   "wall": 266.5,
+   "tokens_per_verify_call": 3.197
+  },
+  "compact": {
+   "label": "compact-prod",
+   "tok_s": 114.03,
+   "tokens": 26633,
+   "wall": 233.6,
+   "tokens_per_verify_call": 2.493
+  }
+ },
+ "agent_bench": {
+  "static": {
+   "requests": 93,
+   "output_tokens": 23409,
+   "decode_tps": 138.2,
+   "median_request_tps": 166.2,
+   "accept": 4.722,
+   "ms_per_step": 34.03
+  },
+  "compact": {
+   "requests": 86,
+   "output_tokens": 19489,
+   "decode_tps": 141.7,
+   "median_request_tps": 171.3,
+   "accept": 4.608,
+   "ms_per_step": 32.37
+  }
+ },
+ "offline_policy_simulation": {
+  "steps": 25351,
+  "cost_ms": [
+   20.46,
+   22.58,
+   23.81,
+   25.76,
+   26.7,
+   28.17
+  ],
+  "policies": {
+   "full6": {
+    "tok_s": 111.4,
+    "tokens_per_step": 3.138,
+    "step_ms": 28.17,
+    "vs_full6": 0.0
+   },
+   "current": {
+    "tok_s": 118.6,
+    "tokens_per_step": 3.054,
+    "step_ms": 25.74,
+    "vs_full6": 0.065
+   },
+   "lag2": {
+    "tok_s": 111.9,
+    "tokens_per_step": 2.881,
+    "step_ms": 25.74,
+    "vs_full6": 0.004
+   },
+   "oracle": {
+    "tok_s": 130.8,
+    "tokens_per_step": 3.138,
+    "step_ms": 23.99,
+    "vs_full6": 0.174
+   }
+  }
+ },
+ "sps_table_compact": {
+  "bias_seconds": 0.020458650000000002,
+  "bs_probes": [
+   1,
+   2
+  ],
+  "alpha_seconds": [
+   0.0,
+   0.0013437499999999977
+  ],
+  "m_probes": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12
+  ],
+  "theta_seconds": [
+   0.0,
+   0.002289412499999999,
+   0.0037656624999999992,
+   0.004821725000000002,
+   0.006544499999999998,
+   0.007299999999999999,
+   0.0173737,
+   0.018891375000000002,
+   0.022882974999999993,
+   0.024678850000000002,
+   0.026579850000000002,
+   0.027665099999999998
+  ]
+ },
+ "notes": [
+  "single request: steps ~5% cheaper, ~2-10% fewer tokens per step; two requests: the 12-token graph tier costs ~10 ms more, compact stays in the 6-token tier most of the time",
+  "lagged (two steps earlier) host budget alone: -2% at one request; this-step device budget is what helps"
+ ]
+}

@@ -1,181 +1,214 @@
 {
-  "date": "2026-10-19",
-  "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
-  "model_revision": "1bae0e1088993b9b82de08f59de5be5a34e42170",
-  "lsglang_commit": "6068667581bebd2184f7e4acb46136f44837889a",
-  "lkqmoe_version": "0.5.5",
-  "lkqmoe_source_commit": "191b8863332dd1e2a21a6ef27cd459a2d406544d",
-  "defaults": {
-    "verify_mode": "static",
-    "main_resident_layers": 0,
-    "lkqstrata_slots": 50,
-    "max_running_requests": 2,
-    "kv_tokens": 524288,
-    "batch_tokens": 22528,
-    "engram_gib": 4,
-    "threads": 112,
-    "hybrid_prefill_max": 6144,
-    "cpu_prefill_below": 1024,
-    "dense_fp4_prefill_indexer": true,
-    "c128_host_length_bound": true,
-    "draft_lm_head_fp8": true,
-    "lkqstrata_every": 2,
-    "lkqstrata_swaps": 32,
-    "engram_prefetch": true,
-    "engram_io_threads": 16,
-    "prefill_pipeline_prefetch_chunks": 6,
-    "lkqmoe_down_grain": 24
-  },
-  "validation": {
-    "framework_files_matched_to_serving_copy": 14,
-    "kernel_release_regression_passed": true,
-    "static_and_cap_sts_strict_preflight_passed": true,
-    "invalid_mode_and_missing_sts_rejected": true,
-    "full_capacity_522k_no_oom": true,
-    "engram_row_store_ab_identical": true,
-    "prefill_pipeline_bitwise_identical": true,
-    "full_capacity_522k_vram_peak_mib": 72758,
-    "agent_bench": {
-      "sessions": 5,
-      "requests": 82,
-      "output_tokens": 20597,
-      "decode_tps": 140.7,
-      "accept": 4.732,
-      "ms_per_step": 33.49,
-      "per_session": {
-        "64k": {
-          "requests": 24,
-          "output_tokens": 8695,
-          "decode_tps": 147.6,
-          "median_request_tps": 166.7,
-          "accept": 5.009,
-          "ms_per_step": 33.83,
-          "ctx_start": 66345,
-          "ctx_end": 94717,
-          "steps": 24
-        },
-        "128k-write": {
-          "requests": 15,
-          "output_tokens": 5531,
-          "decode_tps": 136.9,
-          "median_request_tps": 165.9,
-          "accept": 4.56,
-          "ms_per_step": 33.23,
-          "ctx_start": 132214,
-          "ctx_end": 146710,
-          "steps": 15
-        },
-        "256k": {
-          "requests": 18,
-          "output_tokens": 5049,
-          "decode_tps": 125.3,
-          "median_request_tps": 151.8,
-          "accept": 4.341,
-          "ms_per_step": 34.52,
-          "ctx_start": 264656,
-          "ctx_end": 297327,
-          "steps": 18
-        },
-        "384k": {
-          "requests": 19,
-          "output_tokens": 1003,
-          "decode_tps": 192.1,
-          "median_request_tps": 194.5,
-          "accept": 5.451,
-          "ms_per_step": 27.84,
-          "ctx_start": 393874,
-          "ctx_end": 510994,
-          "steps": 19
-        },
-        "500k": {
-          "requests": 6,
-          "output_tokens": 319,
-          "decode_tps": 211.1,
-          "median_request_tps": 210.2,
-          "accept": 5.596,
-          "ms_per_step": 26.02,
-          "ctx_start": 488873,
-          "ctx_end": 515796,
-          "steps": 6
-        }
-      },
-      "cold_prefill": [
-        {
-          "session": "64k",
-          "prompt_tokens": 66345,
-          "cached_tokens": 0,
-          "ttft_s": 21.597,
-          "prefill_tps": 3072.0
-        },
-        {
-          "session": "128k-write",
-          "prompt_tokens": 132214,
-          "cached_tokens": 0,
-          "ttft_s": 33.52,
-          "prefill_tps": 3944.3
-        },
-        {
-          "session": "256k",
-          "prompt_tokens": 264656,
-          "cached_tokens": 0,
-          "ttft_s": 68.289,
-          "prefill_tps": 3875.5
-        },
-        {
-          "session": "384k",
-          "prompt_tokens": 393874,
-          "cached_tokens": 0,
-          "ttft_s": 105.263,
-          "prefill_tps": 3741.8
-        },
-        {
-          "session": "500k",
-          "prompt_tokens": 488873,
-          "cached_tokens": 0,
-          "ttft_s": 134.037,
-          "prefill_tps": 3647.3
-        }
-      ],
-      "ttft_later_median_s": 2.28,
-      "note": "first long request after a restart in the 64k session; warm recheck in results/agent-bench-20261019-prefill-recheck.json",
-      "cold_prefill_warm_recheck": [
-        {
-          "session": "64k",
-          "prompt_tokens": 66345,
-          "cached_tokens": 0,
-          "ttft_s": 15.576,
-          "prefill_tps": 4259.4
-        },
-        {
-          "session": "128k-write",
-          "prompt_tokens": 132214,
-          "cached_tokens": 0,
-          "ttft_s": 31.618,
-          "prefill_tps": 4181.6
-        }
-      ]
+ "date": "2026-10-20",
+ "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+ "model_revision": "1bae0e1088993b9b82de08f59de5be5a34e42170",
+ "lsglang_commit": "6068667581bebd2184f7e4acb46136f44837889a",
+ "lkqmoe_version": "0.5.6",
+ "lkqmoe_source_commit": "93edcc19eb06a71bccf8e8974d8c8c28decda344",
+ "defaults": {
+  "verify_mode": "compact",
+  "main_resident_layers": 0,
+  "lkqstrata_slots": 50,
+  "max_running_requests": 2,
+  "kv_tokens": 524288,
+  "batch_tokens": 22528,
+  "engram_gib": 4,
+  "threads": 112,
+  "hybrid_prefill_max": 6144,
+  "cpu_prefill_below": 1024,
+  "dense_fp4_prefill_indexer": true,
+  "c128_host_length_bound": true,
+  "draft_lm_head_fp8": true,
+  "lkqstrata_every": 2,
+  "lkqstrata_swaps": 32,
+  "engram_prefetch": true,
+  "engram_io_threads": 16,
+  "prefill_pipeline_prefetch_chunks": 6,
+  "lkqmoe_down_grain": 24,
+  "prefill_fp4": true,
+  "prefill_fp4_slots": 12,
+  "prefill_fp4_rows": 4096,
+  "compact_sps_table": "overlay/sps-table-compact.json",
+  "compact_device_budget": true,
+  "compact_skip_padding_experts": true
+ },
+ "validation": {
+  "framework_files_matched_to_serving_copy": 16,
+  "kernel_release_regression_passed": true,
+  "static_and_cap_sts_strict_preflight_passed": true,
+  "invalid_mode_and_missing_sts_rejected": true,
+  "full_capacity_522k_no_oom": true,
+  "engram_row_store_ab_identical": true,
+  "prefill_pipeline_bitwise_identical": true,
+  "full_capacity_522k_vram_peak_mib": 72816,
+  "agent_bench": {
+   "sessions": 5,
+   "requests": 109,
+   "output_tokens": 21605,
+   "decode_tps": 142.5,
+   "accept": 4.754,
+   "ms_per_step": 33.18,
+   "per_session": {
+    "64k": {
+     "requests": 24,
+     "output_tokens": 6186,
+     "decode_tps": 143.0,
+     "median_request_tps": 164.6,
+     "accept": 4.737,
+     "ms_per_step": 32.99,
+     "ctx_start": 66347,
+     "ctx_end": 106159,
+     "steps": 24
     },
-    "lkqmoe_down_r4_bitwise_identical": true,
-    "lkqmoe_down_ab": {
-      "file": "results/lkqmoe-down-ab-20261019.json",
-      "ms_per_step_t0": [
-        32.6,
-        31.5
-      ],
-      "ms_per_step_t07": [
-        32.4,
-        31.5
-      ]
+    "128k-write": {
+     "requests": 24,
+     "output_tokens": 3766,
+     "decode_tps": 136.3,
+     "median_request_tps": 146.9,
+     "accept": 4.431,
+     "ms_per_step": 32.31,
+     "ctx_start": 132216,
+     "ctx_end": 157279,
+     "steps": 24
+    },
+    "256k": {
+     "requests": 24,
+     "output_tokens": 1191,
+     "decode_tps": 195.2,
+     "median_request_tps": 204.8,
+     "accept": 5.365,
+     "ms_per_step": 26.93,
+     "ctx_start": 264658,
+     "ctx_end": 400755,
+     "steps": 24
+    },
+    "384k": {
+     "requests": 18,
+     "output_tokens": 4606,
+     "decode_tps": 147.2,
+     "median_request_tps": 173.3,
+     "accept": 5.034,
+     "ms_per_step": 34.05,
+     "ctx_start": 394275,
+     "ctx_end": 417310,
+     "steps": 18
+    },
+    "500k": {
+     "requests": 19,
+     "output_tokens": 5856,
+     "decode_tps": 135.3,
+     "median_request_tps": 170.7,
+     "accept": 4.677,
+     "ms_per_step": 34.45,
+     "ctx_start": 489274,
+     "ctx_end": 518261,
+     "steps": 19
     }
+   },
+   "cold_prefill": [
+    {
+     "session": "64k",
+     "prompt_tokens": 66347,
+     "cached_tokens": 0,
+     "ttft_s": 18.871,
+     "prefill_tps": 3515.8
+    },
+    {
+     "session": "128k-write",
+     "prompt_tokens": 132216,
+     "cached_tokens": 0,
+     "ttft_s": 31.998,
+     "prefill_tps": 4132.0
+    },
+    {
+     "session": "256k",
+     "prompt_tokens": 264658,
+     "cached_tokens": 0,
+     "ttft_s": 63.911,
+     "prefill_tps": 4141.0
+    },
+    {
+     "session": "384k",
+     "prompt_tokens": 394275,
+     "cached_tokens": 0,
+     "ttft_s": 99.12,
+     "prefill_tps": 3977.8
+    },
+    {
+     "session": "500k",
+     "prompt_tokens": 489274,
+     "cached_tokens": 0,
+     "ttft_s": 127.289,
+     "prefill_tps": 3843.8
+    }
+   ],
+   "ttft_later_median_s": 2.05
   },
-  "api_compatibility": {
-    "developer_role": "mapped to native system before preprocessing; content and order preserved",
-    "encoder_regression_tests_passed": 77,
-    "gateway_integration_cases_passed": 4,
-    "lan_streaming_probe_passed": true
+  "lkqmoe_down_r4_bitwise_identical": true,
+  "lkqmoe_down_ab": {
+   "file": "results/lkqmoe-down-ab-20261019.json",
+   "ms_per_step_t0": [
+    32.6,
+    31.5
+   ],
+   "ms_per_step_t07": [
+    32.4,
+    31.5
+   ]
   },
-  "previous_release": {
-    "date": "2026-10-19",
-    "commit": "641931f"
+  "compact_engram_ragged_hash_gpu_check": true,
+  "compact_device_budget_matches_brute_force": "400 random confidence sets",
+  "prefill_fp4_pool_reuse_bitwise_identical": true,
+  "varlen_verify": {
+   "file": "results/varlen-verify-20261020.json",
+   "concurrency2_tok_s": [
+    100.1,
+    114.03
+   ],
+   "concurrency1_t0_tok_s": [
+    101.33,
+    104.42
+   ]
+  },
+  "prefill_fp4": {
+   "file": "results/prefill-fp4-20261020.json",
+   "ttft_s": [
+    [
+     65536,
+     18.41,
+     16.78
+    ],
+    [
+     131072,
+     32.55,
+     29.97
+    ],
+    [
+     262144,
+     66.82,
+     61.6
+    ],
+    [
+     393216,
+     104.19,
+     96.7
+    ],
+    [
+     500000,
+     139.79,
+     131.75
+    ]
+   ]
   }
+ },
+ "api_compatibility": {
+  "developer_role": "mapped to native system before preprocessing; content and order preserved",
+  "encoder_regression_tests_passed": 77,
+  "gateway_integration_cases_passed": 4,
+  "lan_streaming_probe_passed": true
+ },
+ "previous_release": {
+  "date": "2026-10-19",
+  "commit": "e802542"
+ }
 }

@@ -1,0 +1,44 @@
+{
+ "note": "522,240-token target, 1024 output tokens, KV pool 524288, compact verify + FP4 prefill; GPU peak from nvidia-smi",
+ "result": {
+  "target": 522240,
+  "prompt_tokens": 522300,
+  "completion_tokens": 1024,
+  "ttft_s": 137.11,
+  "prefill_tok_s": 3809,
+  "decode_tok_s": 86.7,
+  "accept_length": 2.78,
+  "accept_source": "per_request",
+  "legacy_cumulative_accept_length": 2.9822115384615384,
+  "spec_tokens_details": {
+   "spec_accept_rate": 0.35706521739130437,
+   "spec_accept_length": 2.782608695652174,
+   "spec_cap_length": 4.345108695652174,
+   "spec_block_accept_length": 0.0,
+   "spec_num_correct_drafts": 657,
+   "spec_num_proposed_drafts": 1840,
+   "spec_verify_ct": 368,
+   "spec_correct_drafts_histogram": [
+    100,
+    75,
+    80,
+    57,
+    29,
+    27
+   ],
+   "spec_cap_lens_histogram": [
+    0,
+    4,
+    7,
+    64,
+    168,
+    33,
+    92
+   ]
+  },
+  "cached_tokens": null,
+  "recall": true,
+  "vram_peak_mib": 72816,
+  "error": null
+ }
+}

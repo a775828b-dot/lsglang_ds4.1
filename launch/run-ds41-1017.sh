@@ -16,7 +16,7 @@ LOADER_SCRATCH=${LOADER_SCRATCH:-/scratch/ds41-loader}   # NVMe, >= 320 GiB free
 RUN_DIR=${RUN_DIR:-$REPO/run}
 PORT=${PORT:-39504}
 HOST=${HOST:-127.0.0.1}
-VERIFY_MODE=${VERIFY_MODE:-static}
+VERIFY_MODE=${VERIFY_MODE:-compact}   # compact (variable-length, 2026-10-20) | static | cap-sts
 STS_CALIBRATION=${STS_CALIBRATION:-$REPO/config/dspark-sts-calib.json}
 
 # ---- settings used for the published numbers --------------------------------------------
@@ -49,24 +49,33 @@ export PYTHONPATH="$overlay${FLASHINFER_SM120:+:$FLASHINFER_SM120}:$REPO/adapter
 export DSV41_FROZEN_ROOT="$REPO"   # the overlay's sitecustomize runs $REPO/adapter/sitecustomize.py (Engram)
 
 # ---- DSpark (block 5, 6 verify tokens, draft layers on GPU) ------------------------------
-export DS41_ENABLE_FP8_VERIFY6_FASTPATH=1 DS41_DSPARK_FULL_WIDTH=1 SGLANG_TOOL_STRICT_LEVEL=0
+export DS41_ENABLE_FP8_VERIFY6_FASTPATH=1 SGLANG_TOOL_STRICT_LEVEL=0
 unset SGLANG_DSPARK_STS_COLLECT_PATH SGLANG_DSPARK_FOLDED_PROPOSAL
 export SGLANG_DSV41_REASONING_EFFORT=max
 export LVLLM_GPU_RESIDENT_MOE_LAYERS_DSPARK=0-2
 spec_args=(--speculative-draft-model-path "$DRAFT" --speculative-algorithm DSPARK
            --speculative-dspark-block-size 5 --speculative-num-draft-tokens 6
-           --speculative-dspark-sps-table-path "$overlay/sps-table.json")
-case "$VERIFY_MODE" in
-  static) export SGLANG_RAGGED_VERIFY_MODE=static ;;
-  cap-sts)
-    "$VENV/bin/python" - "$STS_CALIBRATION" <<'CAL'
+           --speculative-dspark-sps-table-path "$overlay/$([[ "$VERIFY_MODE" == compact ]] && echo sps-table-compact.json || echo sps-table.json)")
+check_sts(){
+  "$VENV/bin/python" - "$STS_CALIBRATION" <<'CAL'
 import json,math,sys
 d=json.load(open(sys.argv[1])); t=d['temperatures']
 assert len(t)==5 and d.get('num_samples',0)>0 and all(isinstance(x,(int,float)) and not isinstance(x,bool) and math.isfinite(x) and x>0 for x in t), 'Invalid STS calibration'
 CAL
-    export SGLANG_RAGGED_VERIFY_MODE=cap-accept
+}
+case "$VERIFY_MODE" in
+  compact)
+    # 2026-10-20 variable-length verify: 1-6 tokens per request from this step's confidence (on the device) against
+    # the per-M step-time table; CUDA-graph padding skips the CPU / pool experts. Never forced to full width.
+    check_sts
+    export SGLANG_RAGGED_VERIFY_MODE=compact DS41_DSPARK_FULL_WIDTH=0 LKQMOE_ACTIVE_FLAGS=1 DS41_DSPARK_DEVICE_BUDGET=1
     spec_args+=(--speculative-dspark-confidence-sts-path "$STS_CALIBRATION") ;;
-  *) echo 'VERIFY_MODE must be static or cap-sts' >&2; exit 2 ;;
+  static) export SGLANG_RAGGED_VERIFY_MODE=static DS41_DSPARK_FULL_WIDTH=1 ;;
+  cap-sts)
+    check_sts
+    export SGLANG_RAGGED_VERIFY_MODE=cap-accept DS41_DSPARK_FULL_WIDTH=1
+    spec_args+=(--speculative-dspark-confidence-sts-path "$STS_CALIBRATION") ;;
+  *) echo 'VERIFY_MODE must be compact, static or cap-sts' >&2; exit 2 ;;
 esac
 
 
@@ -120,6 +129,9 @@ export LKQMOE_FP8_CONFIGS=1         # tuned SM120 configs for the Triton block-F
 export LKQMOE_DS41_WO_A_TRITON=1    # decode wo_a on the Triton grouped einsum
 export LKQMOE_DS41_WO_A_FP8=1       # keep wo_a in the checkpoint's FP8 (exact, 1.25 GiB less VRAM); 0 = BF16
 export LKQMOE_PREFILL_EXPERT_CHUNK=8 LKQMOE_PREFILL_ROUTE_ACCUM=1   # GPU prefill: 8-expert chunks, FP32 route accumulation
+# lkqmoe 0.5.6: GPU prefill experts on the FP4 tensor cores (FlashInfer 0.6.18 CUTLASS, MXFP4 x MXFP8 = the official activation
+# precision), hot-pool experts copied on the GPU, 12 staging slots, <= 4096 tokens per call; prefill +6-10%. 0 = BF16 path.
+export LKQMOE_PREFILL_FP4=${PREFILL_FP4:-1}
 export LKQMOE_DS41_SPLIT_ZERO=1      # zero the reserved page of the SM120 page-split scratch (NaN fix, see README)
 export LKQSTRATA="$LKQSTRATA" LKQSTRATA_SLOTS="$LKQSTRATA_SLOTS" LKQSTRATA_PROFILE="$lkq/lkqstrata-ds41-1017.json"
 export LKQSTRATA_ADAPT=1 LKQSTRATA_LOG=500 LKQMOE_THREADS="$LKQ_THREADS"

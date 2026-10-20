@@ -1265,11 +1265,90 @@ index 2c869db..b1de54e 100644
  
  
  def _mask_topk_scores(
+diff --git a/python/sglang/srt/layers/attention/dsv4/dsv41_sparse.py b/python/sglang/srt/layers/attention/dsv4/dsv41_sparse.py
+index bd41d64..14bc4b3 100644
+--- a/python/sglang/srt/layers/attention/dsv4/dsv41_sparse.py
++++ b/python/sglang/srt/layers/attention/dsv4/dsv41_sparse.py
+@@ -67,12 +67,40 @@ class RMSNorm(nn.Module):
+         return (self.weight * x).to(dtype)
+ 
+ 
++_COMPACT_VERIFY = None
++
++
++def _compact_verify() -> bool:
++    """True when the server verifies ragged (SGLANG_RAGGED_VERIFY_MODE=compact)."""
++    global _COMPACT_VERIFY
++    if _COMPACT_VERIFY is None:
++        from sglang.srt.speculative.ragged_verify import (
++            RaggedVerifyMode,
++            read_ragged_verify_mode,
++        )
++
++        _COMPACT_VERIFY = read_ragged_verify_mode() is RaggedVerifyMode.COMPACT
++    return _COMPACT_VERIFY
++
++
+ def token_req_indices(forward_batch, *, num_tokens=None) -> torch.Tensor:
+     """req_pool_indices repeated once per token of the batch."""
+     req = forward_batch.req_pool_indices.to(torch.int64)
+     if forward_batch.forward_mode.is_decode():
+         return req
+     if forward_batch.forward_mode.is_target_verify():
++        layout = getattr(forward_batch.spec_info, "ragged_verify_layout", None)
++        if layout is not None and _compact_verify():
++            # Ragged rows: request r owns qo_indptr[r]:qo_indptr[r + 1]. A CUDA-graph
++            # replay refreshes qo_indptr (not extend_start_loc); tokens past the last
++            # run are graph padding and map to the last row.
++            if num_tokens is None:
++                num_tokens = forward_batch.positions.shape[0]
++            nrow = min(req.shape[0], layout.verify_lens.shape[0])
++            ends = layout.qo_indptr_device[1 : nrow + 1].to(torch.int64)
++            t = torch.arange(num_tokens, device=req.device)
++            row = torch.searchsorted(ends, t, right=True).clamp_(max=nrow - 1)
++            return req[row]
+         return torch.repeat_interleave(
+             req, int(forward_batch.spec_info.draft_token_num), output_size=num_tokens
+         )
 diff --git a/python/sglang/srt/layers/engram.py b/python/sglang/srt/layers/engram.py
-index 8f4340f..e359a97 100644
+index 8f4340f..7010701 100644
 --- a/python/sglang/srt/layers/engram.py
 +++ b/python/sglang/srt/layers/engram.py
-@@ -305,7 +305,7 @@ class EngramHasher(nn.Module):
+@@ -292,12 +292,27 @@ class EngramHasher(nn.Module):
+             kmode = MODE_DECODE
+             commit_rows, commit_last = req_slots, None
+         elif mode.is_target_verify():
+-            block = int(forward_batch.spec_info.draft_token_num)
+-            assert num_tokens == bs * block, (
+-                "engram target-verify expects one equal block per request, got "
+-                f"{num_tokens} tokens for {bs} requests of {block}"
+-            )
+-            kmode = MODE_VERIFY
++            layout = getattr(forward_batch.spec_info, "ragged_verify_layout", None)
++            if layout is not None and self._compact_verify():
++                # Compact (ragged) verify: request r verifies the tokens
++                # qo_indptr[r]:qo_indptr[r + 1] (a CUDA-graph replay refreshes qo_indptr,
++                # not extend_start_loc); tokens past the last run are graph padding. Hash
++                # like an extend run (anchor + drafts follow the committed history) and
++                # commit nothing: commit_after_verify writes the accepted tokens.
++                # Fixed-size ops only, so the captured graph replays it.
++                nrow = min(bs, layout.verify_lens.shape[0])
++                qo = layout.qo_indptr_device.to(torch.int64)
++                starts, ends = qo[:nrow], qo[1 : nrow + 1]
++                t = torch.arange(num_tokens, device=device)
++                row = torch.searchsorted(ends, t, right=True).clamp_(max=nrow - 1)
++                kmode = MODE_EXTEND
++            else:
++                block = int(forward_batch.spec_info.draft_token_num)
++                assert num_tokens == bs * block, (
++                    "engram target-verify expects one equal block per request, got "
++                    f"{num_tokens} tokens for {bs} requests of {block}"
++                )
++                kmode = MODE_VERIFY
+             commit_rows = commit_last = None
+         else:
+             assert mode.is_extend(), (
+@@ -305,7 +320,7 @@ class EngramHasher(nn.Module):
              )
              lens = forward_batch.extend_seq_lens.to(torch.int64)
              starts = forward_batch.extend_start_loc.to(torch.int64)
@@ -1278,6 +1357,26 @@ index 8f4340f..e359a97 100644
              num_real = row.shape[0]
              kmode = MODE_EXTEND
              if forward_batch.ngram_history is not None:
+@@ -356,6 +371,19 @@ class EngramHasher(nn.Module):
+             )
+         return hash_ids
+ 
++    def _compact_verify(self) -> bool:
++        """True when the server verifies ragged (SGLANG_RAGGED_VERIFY_MODE=compact)."""
++        compact = getattr(self, "_compact_mode", None)
++        if compact is None:
++            from sglang.srt.speculative.ragged_verify import (
++                RaggedVerifyMode,
++                read_ragged_verify_mode,
++            )
++
++            compact = read_ragged_verify_mode() is RaggedVerifyMode.COMPACT
++            self._compact_mode = compact
++        return compact
++
+     def _torch_hash_ids(
+         self,
+         input_ids: torch.Tensor,
 diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
 index 6d59cf4..1041e3a 100644
 --- a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
@@ -1543,6 +1642,96 @@ index 21861e3..3cd5e03 100644
      return torch.matmul(hidden.to(weight.dtype), weight.T)
  
  
+diff --git a/python/sglang/srt/speculative/dspark_components/dspark_planner.py b/python/sglang/srt/speculative/dspark_components/dspark_planner.py
+index e560265..e324ce0 100644
+--- a/python/sglang/srt/speculative/dspark_components/dspark_planner.py
++++ b/python/sglang/srt/speculative/dspark_components/dspark_planner.py
+@@ -576,6 +576,11 @@ class DSparkVerifyPlanner:
+     ) -> Optional[torch.Tensor]:
+         if self._budget_planner is None or confidence is None or budget is None:
+             return None
++        device_lens = self._device_verify_lens(confidence=confidence, budget=budget)
++        if device_lens is not None:
++            verify_lens = device_lens.to(device=device, dtype=torch.int32)
++            self._tp_sync.sync(SpecTpSyncSite.DSPARK_PLAN, verify_lens)
++            return verify_lens
+         verify_lens = ScheduleVerifyLensTopk.execute(
+             confidence=confidence,
+             budget=budget,
+@@ -603,6 +608,73 @@ class DSparkVerifyPlanner:
+ 
+         return verify_lens
+ 
++    def _device_verify_lens(
++        self, *, confidence: torch.Tensor, budget: int
++    ) -> Optional[torch.Tensor]:
++        """DS41_DSPARK_DEVICE_BUDGET=1: verify lengths from this step's confidence (see
++        experiments/varlen-20261020/patch_varlen4.py); None = use the host budget path."""
++        if not hasattr(self, "_device_budget_on"):
++            import os
++
++            self._device_budget_on = os.environ.get("DS41_DSPARK_DEVICE_BUDGET") == "1"
++            self._device_step_cache = {}
++        if not self._device_budget_on or not self._dynamic_graph_tier:
++            return None
++        table = getattr(self._budget_planner, "sps_table", None)
++        if (
++            not isinstance(table, SpsAdditiveCostTable)
++            or getattr(self._budget_planner, "forced_budget_frac", None) is not None
++        ):
++            return None
++        capture = ragged_capture_num_tokens(model_runner=self.model_runner)
++        if capture is None:
++            return None
++        bs = int(confidence.shape[0])
++        floor = max(self._schedule_cfg.min_verify_len, 1)
++        g = min(
++            int(confidence.shape[1]),
++            self._schedule_cfg.resolved_max_verify_len() - floor,
++        )
++        # The graph tier schedule_layout derives from the host budget.
++        tier = local_verify_tier_num_tokens(
++            bs=bs,
++            verify_token_budget=budget,
++            verify_num_draft_tokens=self.verify_num_draft_tokens,
++            min_verify_len=self._schedule_cfg.min_verify_len,
++        )
++        floor_tokens = verify_layout_graph_num_tokens_floor(
++            num_reqs=bs,
++            ragged_verify_mode=self._ragged_verify_mode,
++            verify_num_draft_tokens=self.verify_num_draft_tokens,
++            model_runner=self.model_runner,
++            tier_num_tokens=tier,
++        )
++        if floor_tokens <= 0 or floor_tokens > capture[-1]:
++            return None
++        graph_tokens = round_up_grid(floor_tokens, capture)
++        key = (bs, g, graph_tokens)
++        step = self._device_step_cache.get(key)
++        if step is None:
++            below = max([c for c in capture if c < graph_tokens], default=0)
++            values = []
++            for extra in range(bs * g + 1):
++                m = bs * floor + extra
++                if m > graph_tokens:
++                    values.append(float("inf"))
++                else:
++                    values.append(
++                        table.step_time(num_reqs=bs, budget=max(m, below + 1) - bs)
++                    )
++            step = torch.tensor(values, dtype=torch.float32, device=confidence.device)
++            self._device_step_cache[key] = step
++        survival = torch.cumprod(confidence[:, :g].to(torch.float32), dim=1).flatten()
++        values, order = torch.sort(survival, descending=True, stable=True)
++        tau = bs * floor + torch.cat([values.new_zeros(1), torch.cumsum(values, 0)])
++        extra = torch.argmax(tau / step)
++        take = (torch.arange(bs * g, device=confidence.device) < extra).to(torch.int32)
++        chosen = torch.zeros_like(take).scatter_(0, order, take)
++        return floor + chosen.view(bs, g).sum(1)
++
+     def _log_verify_lens_decision(
+         self,
+         *,
 diff --git a/python/sglang/srt/speculative/dspark_components/dspark_verify.py b/python/sglang/srt/speculative/dspark_components/dspark_verify.py
 index 83606b5..39f5476 100644
 --- a/python/sglang/srt/speculative/dspark_components/dspark_verify.py

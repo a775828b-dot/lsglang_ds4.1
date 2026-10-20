@@ -5,6 +5,11 @@ from typing import Callable, Optional, Protocol, runtime_checkable
 
 import torch
 
+try:  # lkqmoe per-token skip flags (LKQMOE_ACTIVE_FLAGS=1); see the compact verify below
+    from lkqmoe import zerocopy as _lkqmoe_zerocopy
+except ImportError:
+    _lkqmoe_zerocopy = None
+
 from sglang.kernels.ops.attention.dsv4.unified_kv_kernels.env_gate import (
     is_unified_kv_triton,
 )
@@ -789,6 +794,19 @@ class DSparkWorkerV2(BaseSpecWorker):
         prepare_mamba_track_for_verify(batch)
         with self._observers.segment(InfoSegment.TARGET_VERIFY):
             if run_compact:
+                active = (
+                    _lkqmoe_zerocopy.active_flags()
+                    if _lkqmoe_zerocopy is not None
+                    else None
+                )
+                if active is not None:
+                    # Tokens past the live verify total are CUDA-graph padding: lkqmoe
+                    # gives them route id -1 (no CPU / pool experts). Reset after.
+                    num = int(layout.graph_num_tokens)
+                    active[:num].copy_(
+                        torch.arange(num, device=active.device)
+                        < layout.qo_indptr_device[-1]
+                    )
                 target_verify, hidden_strided = self._verify_executor.run_compact(
                     batch=batch,
                     layout=layout,
@@ -799,6 +817,8 @@ class DSparkWorkerV2(BaseSpecWorker):
                     sampling_info=sampling_info,
                     inject_gate=fold_eligible,
                 )
+                if active is not None:
+                    active.fill_(1)
             else:
                 if (
                     self._verify_epilogue is not None
