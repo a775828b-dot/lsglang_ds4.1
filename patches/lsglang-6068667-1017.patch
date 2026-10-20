@@ -13,8 +13,25 @@ index 289e597..3c3728e 100644
  
      if _is_gfx1250 or not fp8_dot_supported():
          # No fp8 tl.dot on this arch (gfx1250, or CUDA before Ada): upcast the
+diff --git a/python/sglang/srt/entrypoints/openai/chat_encoding.py b/python/sglang/srt/entrypoints/openai/chat_encoding.py
+index ff4fdfc..96aa226 100644
+--- a/python/sglang/srt/entrypoints/openai/chat_encoding.py
++++ b/python/sglang/srt/entrypoints/openai/chat_encoding.py
+@@ -252,9 +252,9 @@ def encode_simple_chat(
+                 messages, thinking_mode=thinking_mode
+             )
+         elif spec == "dsv41":
+-            real_input = encoding_dsv41.encode_messages(
+-                messages, thinking_mode=thinking_mode
+-            )
++            return encoding_dsv41.encode_messages_to_ids(
++                messages, tokenizer, thinking_mode=thinking_mode
++            )[0]
+         else:
+             from sglang.srt.entrypoints.openai import encoding_dsv32
+ 
 diff --git a/python/sglang/srt/entrypoints/openai/encoding_dsv41.py b/python/sglang/srt/entrypoints/openai/encoding_dsv41.py
-index 83d1bce..99e0295 100644
+index 83d1bce..3367075 100644
 --- a/python/sglang/srt/entrypoints/openai/encoding_dsv41.py
 +++ b/python/sglang/srt/entrypoints/openai/encoding_dsv41.py
 @@ -1,14 +1,26 @@
@@ -501,7 +518,7 @@ index 83d1bce..99e0295 100644
  TOOLS_TEMPLATE = """## Tools
  
  You have access to a set of tools to help answer the user's question. You can invoke tools by writing a "<{dsml_token}{tc_block_name}>" block like the following:
-@@ -102,65 +513,6 @@ Otherwise, output directly after {thinking_end_token} with tool calls or final r
+@@ -102,132 +513,83 @@ Otherwise, output directly after {thinking_end_token} with tool calls or final r
  You MUST strictly follow the above defined tool name and parameter schemas to invoke tool calls.
  """
  
@@ -521,8 +538,11 @@ index 83d1bce..99e0295 100644
 -def tools_from_openai_format(tools):
 -    """Extract function definitions from OpenAI-format tool list."""
 -    return [tool["function"] for tool in tools]
--
--
+ 
++def render_tools(tools: List[Dict[str, Union[str, Dict[str, Any]]]]) -> str:
++    """Render tool schemas into the V4.1 system prompt format."""
++    tools_json = [to_json(t) for t in tools]
+ 
 -def tool_calls_from_openai_format(tool_calls):
 -    """Convert OpenAI-format tool calls to internal format."""
 -    return [
@@ -532,26 +552,48 @@ index 83d1bce..99e0295 100644
 -        }
 -        for tool_call in tool_calls
 -    ]
--
--
--def encode_arguments_to_dsml(tool_call: Dict[str, Any]) -> str:
--    """Encode tool call arguments into V4.1 DSML parameter format."""
--    p_dsml_template = (
--        '<{dsml_token}{tool_parameter_tag_name} name="{key}" string="{is_str}">'
++    return TOOLS_TEMPLATE.format(
++        tool_schemas="\n".join(tools_json),
++        dsml_token=dsml_token,
++        tc_block_name=tool_calls_block_name,
++        tool_call_tag_name=tool_call_tag_name,
++        tool_parameter_tag_name=tool_parameter_tag_name,
++        thinking_start_token=thinking_start_token,
++        thinking_end_token=thinking_end_token,
++    )
+ 
+ 
+ def encode_arguments_to_dsml(tool_call: Dict[str, Any]) -> str:
+     """Encode tool call arguments into V4.1 DSML parameter format."""
+     p_dsml_template = (
+         '<{dsml_token}{tool_parameter_tag_name} name="{key}" string="{is_str}">'
 -        "{value}</{dsml_token}{tool_parameter_tag_name}>"
--    )
--    P_dsml_strs = []
--
++        '{value}</{dsml_token}{tool_parameter_tag_name}>'
+     )
+     P_dsml_strs = []
+ 
 -    raw_arguments = tool_call["arguments"]
 -    arguments = (
 -        json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
 -    )
--    if not isinstance(arguments, dict):
++    arguments = tool_call["arguments"]
+     if not isinstance(arguments, dict):
 -        raise ValueError(
 -            "Assistant tool call function.arguments must be a JSON object."
 -        )
--
--    for k, v in arguments.items():
++        # Tolerate JSON strings, including double-encoded ones.
++        for _ in range(2):
++            if isinstance(arguments, str):
++                try:
++                    arguments = json.loads(arguments)
++                except Exception:
++                    break
++            else:
++                break
++        if not isinstance(arguments, dict):
++            arguments = {"arguments": tool_call["arguments"]}
+ 
+     for k, v in arguments.items():
 -        P_dsml_strs.append(
 -            p_dsml_template.format(
 -                dsml_token=dsml_token,
@@ -561,16 +603,32 @@ index 83d1bce..99e0295 100644
 -                value=v if isinstance(v, str) else to_json(v),
 -            )
 -        )
++        P_dsml_strs.append(p_dsml_template.format(
++            dsml_token=dsml_token,
++            tool_parameter_tag_name=tool_parameter_tag_name,
++            key=k,
++            is_str="true" if isinstance(v, str) else "false",
++            value=v if isinstance(v, str) else to_json(v),
++        ))
+ 
+     return "\n".join(P_dsml_strs)
+ 
+ 
+-def render_tools(tools: List[Dict[str, Union[str, Dict[str, Any]]]]) -> str:
+-    """Render tool schemas into the V4.1 system prompt format."""
+-    tools_json = [to_json(t) for t in tools]
 -
--    return "\n".join(P_dsml_strs)
+-    return TOOLS_TEMPLATE.format(
+-        tool_schemas="\n".join(tools_json),
+-        dsml_token=dsml_token,
+-        tc_block_name=tool_calls_block_name,
+-        tool_call_tag_name=tool_call_tag_name,
+-        tool_parameter_tag_name=tool_parameter_tag_name,
+-        thinking_start_token=thinking_start_token,
+-        thinking_end_token=thinking_end_token,
+-    )
 -
- 
- def render_tools(tools: List[Dict[str, Union[str, Dict[str, Any]]]]) -> str:
-     """Render tool schemas into the V4.1 system prompt format."""
-@@ -177,57 +529,67 @@ def render_tools(tools: List[Dict[str, Union[str, Dict[str, Any]]]]) -> str:
-     )
- 
- 
+-
 -def render_reasoning_effort(
 -    index: int,
 -    thinking_mode: str,
@@ -592,40 +650,7 @@ index 83d1bce..99e0295 100644
 -    if index == 0 and thinking_mode == "thinking":
 -        return REASONING_EFFORT_TEMPLATE.format(budget=effort)
 -    return ""
-+def encode_arguments_to_dsml(tool_call: Dict[str, Any]) -> str:
-+    """Encode tool call arguments into V4.1 DSML parameter format."""
-+    p_dsml_template = (
-+        '<{dsml_token}{tool_parameter_tag_name} name="{key}" string="{is_str}">'
-+        '{value}</{dsml_token}{tool_parameter_tag_name}>'
-+    )
-+    P_dsml_strs = []
-+
-+    arguments = tool_call["arguments"]
-+    if not isinstance(arguments, dict):
-+        # Tolerate JSON strings, including double-encoded ones.
-+        for _ in range(2):
-+            if isinstance(arguments, str):
-+                try:
-+                    arguments = json.loads(arguments)
-+                except Exception:
-+                    break
-+            else:
-+                break
-+        if not isinstance(arguments, dict):
-+            arguments = {"arguments": tool_call["arguments"]}
-+
-+    for k, v in arguments.items():
-+        P_dsml_strs.append(p_dsml_template.format(
-+            dsml_token=dsml_token,
-+            tool_parameter_tag_name=tool_parameter_tag_name,
-+            key=k,
-+            is_str="true" if isinstance(v, str) else "false",
-+            value=v if isinstance(v, str) else to_json(v),
-+        ))
- 
-+    return "\n".join(P_dsml_strs)
-+
-+
+-
 +# ============================================================
 +# Message Rendering
 +# ============================================================
@@ -1102,7 +1127,7 @@ index 83d1bce..99e0295 100644
      processed_context, _ = process_image_messages(context) if context else ([], [])
      processed_messages, images = process_image_messages(messages)
      prompt = _encode_messages_text(
-@@ -732,3 +853,149 @@ def encode_messages(
+@@ -732,3 +853,298 @@ def encode_messages(
      if return_multi_modal_data:
          return prompt, {"images": images}
      return prompt
@@ -1252,6 +1277,192 @@ index 83d1bce..99e0295 100644
 +        "reasoning_content": reasoning_content,
 +        "tool_calls": tool_calls_to_openai_format(tool_calls)
 +    }
++
++
++# --- Tokenization (2026-10-21, after deepseek-recipe) ------------------------------------------------------------
++# A rendered prompt used to go through tokenizer.encode as one string, so an added-token spelling written in a user
++# message, a tool result or a tool definition (e.g. "<｜User｜>" in a file the agent reads) became a control token.
++# deepseek-recipe treats only the template's control tokens, image placeholders and the grounding tokens inside
++# assistant content / reasoning as special; everything else is plain text. Same here: content spellings are swapped
++# for private-use sentinels while rendering, the prompt is split at the remaining (template) added tokens, and the
++# plain regions -- sentinels restored -- are encoded as one batch with a copy of the tokenizer that has no added
++# vocabulary. Content without added-token spellings tokenizes exactly as before (same regions, same pipeline).
++import logging
++import os
++
++logger = logging.getLogger(__name__)
++
++GROUNDING_TOKENS = (
++    "<｜ref｜>", "<｜/ref｜>", "<｜box｜>", "<｜/box｜>",
++    "<｜point｜>", "<｜/point｜>", "<｜polygon｜>", "<｜/polygon｜>",
++)
++_SENTINEL_OPEN, _SENTINEL_CLOSE = "\ue000", "\ue001"
++_SENTINEL_RE = re.compile("\ue000([0-9]+)\ue001")
++_ASSISTANT_TEXT_KEYS = ("content", "reasoning_content", "reasoning")
++_TOKENIZER_PARTS: Dict[int, Any] = {}
++
++
++def plain_content_tokens_enabled() -> bool:
++    return os.environ.get("DS41_PLAIN_CONTENT_TOKENS", "1") != "0"
++
++
++def _tokenizer_parts(tokenizer):
++    """(plain tokenizer without added vocabulary, added spelling -> id, split pattern, grounding spellings)."""
++    parts = _TOKENIZER_PARTS.get(id(tokenizer))
++    if parts is None:
++        from tokenizers import Tokenizer
++
++        backend = getattr(tokenizer, "backend_tokenizer", None) or tokenizer._tokenizer
++        spec = json.loads(backend.to_str())
++        spec["added_tokens"] = []
++        plain = Tokenizer.from_str(json.dumps(spec))
++        plain.no_truncation()
++        plain.no_padding()
++        added = dict(tokenizer.get_added_vocab())
++        # leftmost-longest, as the tokenizer's own added-token split
++        pattern = re.compile("|".join(re.escape(t) for t in sorted(added, key=len, reverse=True)))
++        parts = (plain, added, pattern, frozenset(GROUNDING_TOKENS) & frozenset(added))
++        _TOKENIZER_PARTS[id(tokenizer)] = parts
++    return parts
++
++
++def _escape_value(value: Any, pattern, keep, store: List[str], state: Dict[str, bool]) -> Any:
++    if isinstance(value, str):
++        if _SENTINEL_OPEN in value or _SENTINEL_CLOSE in value:
++            state["collision"] = True
++
++        def repl(match):
++            spelling = match.group(0)
++            if spelling in keep:
++                return spelling
++            store.append(spelling)
++            return f"{_SENTINEL_OPEN}{len(store) - 1}{_SENTINEL_CLOSE}"
++
++        return pattern.sub(repl, value)
++    if isinstance(value, list):
++        return [_escape_value(v, pattern, keep, store, state) for v in value]
++    if isinstance(value, tuple):
++        return tuple(_escape_value(v, pattern, keep, store, state) for v in value)
++    if isinstance(value, dict):
++        return {k: _escape_value(v, pattern, keep, store, state) for k, v in value.items()}
++    return value
++
++
++def encode_messages_to_ids(
++    messages: List[Dict[str, Any]],
++    tokenizer,
++    *,
++    image_token_id: Optional[int] = None,
++    **kwargs,
++) -> Tuple[List[int], str, Dict[str, Any]]:
++    """encode_messages + tokenization. Returns (prompt ids, prompt text, media data)."""
++
++    def legacy():
++        prompt, media = encode_messages(messages, return_multi_modal_data=True, **kwargs)
++        if media["images"] and image_token_id is not None:
++            prompt = prompt.replace(IMAGE_PLACEHOLDER, tokenizer.convert_ids_to_tokens(image_token_id))
++        return tokenizer.encode(prompt), prompt, media
++
++    if not plain_content_tokens_enabled():
++        return legacy()
++    plain, added, pattern, grounding = _tokenizer_parts(tokenizer)
++    store: List[str] = []
++    state = {"collision": False}
++    safe = []
++    for msg in messages:
++        assistant = msg.get("role") == "assistant"
++        safe.append({
++            k: _escape_value(v, pattern, grounding if assistant and k in _ASSISTANT_TEXT_KEYS else (), store, state)
++            for k, v in msg.items()
++        })
++    if state["collision"]:
++        return legacy()
++    if not store:
++        safe = messages  # nothing to escape: render the caller's messages unchanged
++    prompt, media = encode_messages(safe, return_multi_modal_data=True, **kwargs)
++    if media["images"] and image_token_id is not None:
++        prompt = prompt.replace(IMAGE_PLACEHOLDER, tokenizer.convert_ids_to_tokens(image_token_id))
++    ids: List[Optional[int]] = []
++    texts: List[str] = []
++    slots: List[int] = []
++    restored = [0]
++
++    def restore(text: str) -> str:
++        def repl(match):
++            restored[0] += 1
++            return store[int(match.group(1))]
++
++        return _SENTINEL_RE.sub(repl, text) if store else text
++
++    pieces: List[str] = []
++    pos = 0
++    for match in pattern.finditer(prompt):
++        if match.start() > pos:
++            text = restore(prompt[pos:match.start()])
++            slots.append(len(ids))
++            ids.append(None)
++            texts.append(text)
++            pieces.append(text)
++        ids.append(added[match.group(0)])
++        pieces.append(match.group(0))
++        pos = match.end()
++    if pos < len(prompt):
++        text = restore(prompt[pos:])
++        slots.append(len(ids))
++        ids.append(None)
++        texts.append(text)
++        pieces.append(text)
++    if restored[0] != len(store):
++        logger.warning("dsv41 plain-content tokenization: %d of %d escaped spellings restored; "
++                       "using the single-string encoding", restored[0], len(store))
++        return legacy()
++    if texts:
++        for slot, enc in zip(slots, plain.encode_batch(texts, add_special_tokens=False)):
++            ids[slot] = enc.ids
++    flat: List[int] = []
++    for item in ids:
++        if isinstance(item, list):
++            flat.extend(item)
++        else:
++            flat.append(item)
++    return flat, "".join(pieces), media
+diff --git a/python/sglang/srt/entrypoints/openai/serving_chat.py b/python/sglang/srt/entrypoints/openai/serving_chat.py
+index 232f0c5..c48a508 100644
+--- a/python/sglang/srt/entrypoints/openai/serving_chat.py
++++ b/python/sglang/srt/entrypoints/openai/serving_chat.py
+@@ -1465,26 +1465,22 @@ class OpenAIServingChat(OpenAIServingBase):
+                     encoding_dsv41.attach_task_to_last_user_message(
+                         messages, request.task
+                     )
+-                real_input, media = encoding_dsv41.encode_messages(
++                # Control tokens only from the template (deepseek-recipe rule); plain regions in one batch.
++                prompt_ids, real_input, media = encoding_dsv41.encode_messages_to_ids(
+                     messages,
++                    self.tokenizer_manager.tokenizer,
++                    image_token_id=getattr(
++                        self.tokenizer_manager.model_config.hf_config, "image_token_id", None
++                    ),
+                     thinking_mode=thinking_mode,
+                     reasoning_effort=self._resolve_dsv41_reasoning_effort(
+                         request.reasoning_effort
+                     ),
+-                    return_multi_modal_data=True,
+                 )
+                 if media["images"]:
+                     if not is_multimodal:
+                         raise ValueError("image input is not supported for this model")
+                     image_data.extend(image["url"] for image in media["images"])
+-                    tokenizer = self.tokenizer_manager.tokenizer
+-                    real_input = real_input.replace(
+-                        encoding_dsv41.IMAGE_PLACEHOLDER,
+-                        tokenizer.convert_ids_to_tokens(
+-                            self.tokenizer_manager.model_config.hf_config.image_token_id
+-                        ),
+-                    )
+-                prompt_ids = self.tokenizer_manager.tokenizer.encode(real_input)
+             else:
+                 real_input = encoding_dsv32.encode_messages(
+                     messages, thinking_mode=thinking_mode
 diff --git a/python/sglang/srt/layers/attention/deepseek_v4_backend.py b/python/sglang/srt/layers/attention/deepseek_v4_backend.py
 index 2c869db..b1de54e 100644
 --- a/python/sglang/srt/layers/attention/deepseek_v4_backend.py

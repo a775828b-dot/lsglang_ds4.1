@@ -99,6 +99,12 @@ read_file / list_dir / grep / edit_file / write_file / check_python，工具结�
 **满容量验证（不是测速）**：522,240 输入 + 1,024 输出（KV 池 524288，变长验证 + FP4 prefill）完成且正确召回，首字 137.1 s；
 显存峰值 72,816 MiB（共 73,415），余量 0.58 GiB，无 OOM（[数据](results/capacity-522k-20261020.json)）。
 
+## 10-21：分词与官方 deepseek-recipe 一致
+
+- 原来 V4.1 的 prompt 渲染成字符串后整串分词，用户消息、工具结果、工具定义里出现的 `<｜User｜>`、`<｜end▁of▁sentence｜>`、`</think>` 等写法会被编成真正的控制 token（模型会看到伪造的对话边界，读 DeepSeek 相关源码或模板时就会触发）。
+- 现在按 DeepSeek 官方 [deepseek-recipe](https://github.com/deepseek-ai/deepseek-recipe) 的规则：只有模板插入的控制 token、图片占位符和 assistant 正文 / 思考里的 grounding token 是特殊 token，其余内容用去掉 added vocabulary 的 tokenizer 按普通文本编码，各段一批编码（`encoding_dsv41.encode_messages_to_ids`；`DS41_PLAIN_CONTENT_TOKENS=0` 回到原路径）。
+- 验证（`results/plain-content-tokens-20261021.json`）：40 组普通对话的 token ID 与原路径逐个相同；6 组请求（含注入、grounding、工具结果、思考模式）与 deepseek-recipe 0.2.0 逐 token 相同；长会话命中缓存的轮次（新增 < 2K token）首字 400–600K 上下文 2.20 → 1.81 s。
+
 ## 10-20 优化内容
 
 | 项目 | 开关（启动脚本默认） | 说明 |

@@ -1,0 +1,101 @@
+{
+ "date": "2026-10-21",
+ "what": "DSv4.1 tokenization after deepseek-recipe: only template control tokens (and grounding tokens in assistant content / reasoning) are special; content spellings are plain text",
+ "offline": {
+  "normal_identical": "40/40",
+  "inject_user": {
+   "specials_single_string": 9,
+   "specials_new": 4,
+   "prompt_text_same": true,
+   "grounding_kept": null
+  },
+  "inject_tool": {
+   "specials_single_string": 37,
+   "specials_new": 32,
+   "prompt_text_same": true,
+   "grounding_kept": null
+  },
+  "inject_tool_def": {
+   "specials_single_string": 23,
+   "specials_new": 18,
+   "prompt_text_same": true,
+   "grounding_kept": null
+  },
+  "inject_assistant": {
+   "specials_single_string": 15,
+   "specials_new": 10,
+   "prompt_text_same": true,
+   "grounding_kept": true
+  },
+  "long": {
+   "tokens": 109231,
+   "identical": true,
+   "single_string_s": 0.205,
+   "new_first_call_s": 0.065,
+   "new_s": 0.056
+  }
+ },
+ "official_deepseek_recipe_0_2_0": {
+  "chat_plain": {
+   "identical": true,
+   "official_len": 10,
+   "ours_len": 10,
+   "first_diff": null,
+   "prompt_identical": true
+  },
+  "thinking_plain": {
+   "identical": true,
+   "official_len": 31,
+   "ours_len": 31,
+   "first_diff": null,
+   "prompt_identical": true
+  },
+  "user_inject": {
+   "identical": true,
+   "official_len": 40,
+   "ours_len": 40,
+   "first_diff": null,
+   "prompt_identical": true
+  },
+  "multi_turn_inject_grounding": {
+   "identical": true,
+   "official_len": 49,
+   "ours_len": 49,
+   "first_diff": null,
+   "prompt_identical": true
+  },
+  "tool_result_inject": {
+   "identical": true,
+   "official_len": 350,
+   "ours_len": 350,
+   "first_diff": null,
+   "prompt_identical": true
+  },
+  "tool_result_inject_thinking": {
+   "identical": true,
+   "official_len": 377,
+   "ours_len": 377,
+   "first_diff": null,
+   "prompt_identical": true
+  }
+ },
+ "online": {
+  "injection_prompt_tokens": 40,
+  "official_prompt_tokens": 40,
+  "cached_turn_ttft_median_s_uncached_below_2k": {
+   "0-200K": [
+    1.35,
+    1.31
+   ],
+   "200-400K": [
+    1.76,
+    1.68
+   ],
+   "400-600K": [
+    2.2,
+    1.81
+   ]
+  },
+  "note": "before = 2026-10-20 production agent_bench, after = agent-bench recipe-1021; turns with < 2K uncached tokens"
+ }
+}

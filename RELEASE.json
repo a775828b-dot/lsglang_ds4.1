@@ -1,5 +1,5 @@
 {
- "date": "2026-10-20",
+ "date": "2026-10-21",
  "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
  "model_revision": "1bae0e1088993b9b82de08f59de5be5a34e42170",
  "lsglang_commit": "6068667581bebd2184f7e4acb46136f44837889a",
@@ -30,10 +30,11 @@
   "prefill_fp4_rows": 4096,
   "compact_sps_table": "overlay/sps-table-compact.json",
   "compact_device_budget": true,
-  "compact_skip_padding_experts": true
+  "compact_skip_padding_experts": true,
+  "plain_content_tokens": true
  },
  "validation": {
-  "framework_files_matched_to_serving_copy": 16,
+  "framework_files_matched_to_serving_copy": 18,
   "kernel_release_regression_passed": true,
   "static_and_cap_sts_strict_preflight_passed": true,
   "invalid_mode_and_missing_sts_rejected": true,
@@ -199,6 +200,15 @@
      131.75
     ]
    ]
+  },
+  "plain_content_tokens": {
+   "file": "results/plain-content-tokens-20261021.json",
+   "normal_conversations_identical": "40/40",
+   "official_deepseek_recipe_identical": "6/6",
+   "cached_turn_ttft_400_600k_s": [
+    2.2,
+    1.81
+   ]
   }
  },
  "api_compatibility": {
@@ -208,7 +218,7 @@
   "lan_streaming_probe_passed": true
  },
  "previous_release": {
-  "date": "2026-10-19",
-  "commit": "e802542"
+  "date": "2026-10-20",
+  "commit": "8c21b14"
  }
 }
