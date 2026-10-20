@@ -6,7 +6,7 @@
  "lkqmoe_version": "0.5.6",
  "lkqmoe_source_commit": "93edcc19eb06a71bccf8e8974d8c8c28decda344",
  "defaults": {
-  "verify_mode": "compact",
+  "verify_mode": "static",
   "main_resident_layers": 0,
   "lkqstrata_slots": 50,
   "max_running_requests": 2,
@@ -220,5 +220,18 @@
  "previous_release": {
   "date": "2026-10-20",
   "commit": "8c21b14"
- }
+ },
+ "known_issues": [
+  {
+   "date": "2026-10-21",
+   "component": "DSpark variable-length verify (VERIFY_MODE=compact)",
+   "status": "open; default reverted to static",
+   "symptom": "with one running request, decoded tokens are changed (temperature-0 verbatim copy of 4 code chunks: 4/4 wrong under compact, 0/4 with two concurrent requests, 0/4 under static)",
+   "impact": "agent tool-call markup breaks, arguments parse as {}, the agent retries and finally ends a turn with reasoning only; text generated under compact since 2026-10-20 may contain typos",
+   "ruled_out": [
+    "FP4 prefill (used in both the failing and the clean runs)",
+    "deepseek-recipe tokenization (prompt ids identical to the old path on the failing request)"
+   ]
+  }
+ ]
 }

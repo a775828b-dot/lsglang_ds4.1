@@ -16,7 +16,8 @@ LOADER_SCRATCH=${LOADER_SCRATCH:-/scratch/ds41-loader}   # NVMe, >= 320 GiB free
 RUN_DIR=${RUN_DIR:-$REPO/run}
 PORT=${PORT:-39504}
 HOST=${HOST:-127.0.0.1}
-VERIFY_MODE=${VERIFY_MODE:-compact}   # compact (variable-length, 2026-10-20) | static | cap-sts
+VERIFY_MODE=${VERIFY_MODE:-static}    # static (default) | cap-sts | compact (variable-length: KNOWN BUG 2026-10-21,
+                                      # corrupts tokens with one running request; do not use until fixed)
 STS_CALIBRATION=${STS_CALIBRATION:-$REPO/config/dspark-sts-calib.json}
 
 # ---- settings used for the published numbers --------------------------------------------
@@ -65,6 +66,8 @@ CAL
 }
 case "$VERIFY_MODE" in
   compact)
+    # KNOWN BUG (2026-10-21): with a single running request this mode changes output tokens (temperature-0 copy test:
+    # 4/4 copies wrong, e.g. Collector -> Colletor); tool-call markup breaks and arguments are lost. Not the default.
     # 2026-10-20 variable-length verify: 1-6 tokens per request from this step's confidence (on the device) against
     # the per-M step-time table; CUDA-graph padding skips the CPU / pool experts. Never forced to full width.
     check_sts
