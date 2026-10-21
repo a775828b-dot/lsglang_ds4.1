@@ -28,9 +28,6 @@
   "prefill_fp4": true,
   "prefill_fp4_slots": 12,
   "prefill_fp4_rows": 4096,
-  "compact_sps_table": "overlay/sps-table-compact.json",
-  "compact_device_budget": true,
-  "compact_skip_padding_experts": true,
   "plain_content_tokens": true
  },
  "validation": {
@@ -157,8 +154,6 @@
     31.5
    ]
   },
-  "compact_engram_ragged_hash_gpu_check": true,
-  "compact_device_budget_matches_brute_force": "400 random confidence sets",
   "prefill_fp4_pool_reuse_bitwise_identical": true,
   "varlen_verify": {
    "file": "results/varlen-verify-20261020.json",
@@ -221,17 +216,22 @@
   "date": "2026-10-20",
   "commit": "8c21b14"
  },
- "known_issues": [
+ "dropped_features": [
   {
    "date": "2026-10-21",
-   "component": "DSpark variable-length verify (VERIFY_MODE=compact)",
-   "status": "open; default reverted to static",
-   "symptom": "with one running request, decoded tokens are changed (temperature-0 verbatim copy of 4 code chunks: 4/4 wrong under compact, 0/4 with two concurrent requests, 0/4 under static)",
-   "impact": "agent tool-call markup breaks, arguments parse as {}, the agent retries and finally ends a turn with reasoning only; text generated under compact since 2026-10-20 may contain typos",
+   "feature": "DSpark variable-length verify (VERIFY_MODE=compact)",
+   "gain": "one request: none (+1-3%, within day-to-day noise); two concurrent requests: +13.9% decode (100.1 -> 114.0 tok/s)",
+   "reason": "changes output tokens: temperature-0 verbatim copy wrong in 4/8-6/8 chunks with one request and ~1/8 with two; static: no mid-text error in 28 single-request and 12 two-request chunks",
+   "localized": "divergence starts at the attention output of layer 1 (an SWA-only layer); root cause not found",
    "ruled_out": [
-    "FP4 prefill (used in both the failing and the clean runs)",
-    "deepseek-recipe tokenization (prompt ids identical to the old path on the failing request)"
-   ]
+    "FP4 prefill",
+    "deepseek-recipe tokenization",
+    "Engram hashing",
+    "device-side verify lengths",
+    "graph padding tokens",
+    "draft KV injection"
+   ],
+   "status": "dropped; removed from the launcher"
   }
  ]
 }

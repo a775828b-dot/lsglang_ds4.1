@@ -16,8 +16,7 @@ LOADER_SCRATCH=${LOADER_SCRATCH:-/scratch/ds41-loader}   # NVMe, >= 320 GiB free
 RUN_DIR=${RUN_DIR:-$REPO/run}
 PORT=${PORT:-39504}
 HOST=${HOST:-127.0.0.1}
-VERIFY_MODE=${VERIFY_MODE:-static}    # static (default) | cap-sts | compact (variable-length: KNOWN BUG 2026-10-21,
-                                      # corrupts tokens with one running request; do not use until fixed)
+VERIFY_MODE=${VERIFY_MODE:-static}    # static (default) | cap-sts; variable-length verify (compact) dropped 2026-10-21
 STS_CALIBRATION=${STS_CALIBRATION:-$REPO/config/dspark-sts-calib.json}
 
 # ---- settings used for the published numbers --------------------------------------------
@@ -56,7 +55,7 @@ export SGLANG_DSV41_REASONING_EFFORT=max
 export LVLLM_GPU_RESIDENT_MOE_LAYERS_DSPARK=0-2
 spec_args=(--speculative-draft-model-path "$DRAFT" --speculative-algorithm DSPARK
            --speculative-dspark-block-size 5 --speculative-num-draft-tokens 6
-           --speculative-dspark-sps-table-path "$overlay/$([[ "$VERIFY_MODE" == compact ]] && echo sps-table-compact.json || echo sps-table.json)")
+           --speculative-dspark-sps-table-path "$overlay/sps-table.json")
 check_sts(){
   "$VENV/bin/python" - "$STS_CALIBRATION" <<'CAL'
 import json,math,sys
@@ -66,19 +65,15 @@ CAL
 }
 case "$VERIFY_MODE" in
   compact)
-    # KNOWN BUG (2026-10-21): with a single running request this mode changes output tokens (temperature-0 copy test:
-    # 4/4 copies wrong, e.g. Collector -> Colletor); tool-call markup breaks and arguments are lost. Not the default.
-    # 2026-10-20 variable-length verify: 1-6 tokens per request from this step's confidence (on the device) against
-    # the per-M step-time table; CUDA-graph padding skips the CPU / pool experts. Never forced to full width.
-    check_sts
-    export SGLANG_RAGGED_VERIFY_MODE=compact DS41_DSPARK_FULL_WIDTH=0 LKQMOE_ACTIVE_FLAGS=1 DS41_DSPARK_DEVICE_BUDGET=1
-    spec_args+=(--speculative-dspark-confidence-sts-path "$STS_CALIBRATION") ;;
+    # Variable-length verify was dropped on 2026-10-21: it changed output tokens (temperature-0 copy test, with one
+    # and with two requests). Two requests decoded 13.9% faster, one request gained nothing.
+    echo 'VERIFY_MODE=compact (variable-length verify) was dropped on 2026-10-21; use static or cap-sts' >&2; exit 2 ;;
   static) export SGLANG_RAGGED_VERIFY_MODE=static DS41_DSPARK_FULL_WIDTH=1 ;;
   cap-sts)
     check_sts
     export SGLANG_RAGGED_VERIFY_MODE=cap-accept DS41_DSPARK_FULL_WIDTH=1
     spec_args+=(--speculative-dspark-confidence-sts-path "$STS_CALIBRATION") ;;
-  *) echo 'VERIFY_MODE must be compact, static or cap-sts' >&2; exit 2 ;;
+  *) echo 'VERIFY_MODE must be static or cap-sts' >&2; exit 2 ;;
 esac
 
 

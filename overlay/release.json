@@ -23,7 +23,6 @@
    "verify_mode": "compact (variable-length DSpark verify) by default",
    "LKQMOE_ACTIVE_FLAGS": "CUDA-graph padding of a ragged verify runs no CPU / pool experts",
    "DS41_DSPARK_DEVICE_BUDGET": "verify lengths from this step's confidence on the device (per-M SPS table)",
-   "sps-table-compact.json": "step time per total verify tokens M = 1..12 (profiled, padding skipped)",
    "LKQMOE_PREFILL_FP4": "GPU prefill experts on the SM120 FP4 tensor cores (lkqmoe 0.5.6)"
   }
  }

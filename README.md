@@ -2,11 +2,12 @@
 
 官方 **DeepSeek-V4.1-Flash-1017（MXFP4）** 单卡推理框架：RTX PRO 5000 72GB、双路 EPYC，
 **512K 共享 KV、最多 2 并发、DSpark、默认固定验证**，附编译好的 **lkqmoe 0.5.6**。
-本页参数和速度来自 2026-10-20 的部署：在 10-19 的配置（prefill 分块 22528、每层 50 个热专家槽、prefill 软件流水、lkqmoe CPU Down 一次读一行）上，DSpark 改为变长验证（每步按置信度验证 1–6 个 token，两个请求同时 decode 时 +14%），lkqmoe 0.5.6 的 GPU prefill 改用 FP4 张量核（prefill +6–10%）。
-> **⚠ 已知问题（2026-10-21）：变长验证（`VERIFY_MODE=compact`）在只有一个请求时会改错输出 token，默认已改回固定验证（`static`）。**
-> - 现象：温度 0、关思考，让模型逐字复述 4 段代码。变长验证下单请求 4/4 段出错（`Collector`→`Colletor`、`deque`→`dequ`、`bootstrap`→`botstrap`、`reasoning`→`reasonings`），两个请求同时跑 0/4 出错；固定验证下单请求 0/4 出错。
-> - 影响：编码代理里工具调用的 DSML 标记被改坏，参数解析成 `{}`，模型反复重试后只思考、不输出，任务中断。10-20 晚起在变长验证下生成的内容可能含错字。
-> - 已排除：FP4 prefill（出错和正常的两组都用它）、deepseek-recipe 分词（出错请求的 prompt token 与旧路径逐个相同）。嫌疑在单请求按 1–6 token 变长验证的路径，正在修；修好前不要用 `compact`。下文的测速数字是 10-20 在变长验证下测的。
+本页参数和速度来自 2026-10-20 的部署：在 10-19 的配置（prefill 分块 22528、每层 50 个热专家槽、prefill 软件流水、lkqmoe CPU Down 一次读一行）上，lkqmoe 0.5.6 的 GPU prefill 改用 FP4 张量核（prefill +6–10%）。DSpark 试过变长验证，10-21 放弃（见下）。
+> **DSpark 变长验证（`compact`）已于 2026-10-21 放弃，只保留固定验证（`static`）和 `cap-sts`，不再继续迁移。**
+> - 收益：单请求没有收益（+1% 到 +3%，在日间波动 ±2% 以内）；两个请求同时 decode 合计 +13.9%（100.1 → 114.0 tok/s）。
+> - 问题：会改错输出 token。温度 0 逐字复述代码，单请求每轮 4/8 到 6/8 段出错（`Collector`→`Colletor`、`reasoning`→`reasonings`），两个请求约 1/8 段出错；编码代理里工具调用的参数会解析成 `{}`，任务中断。固定验证下单请求 28 段、两个请求 12 段都没有中间错字。
+> - 已定位到第 1 层（只用 SWA 的注意力层）输出开始偏离，根因未找到；排除了 FP4 prefill、deepseek-recipe 分词、Engram 哈希、设备端定长、填充 token、草稿 KV 注入。两个请求的收益抵不过出错风险，启动脚本已去掉 `compact`。
+> - 下文测速数字是 10-20 在变长验证下测的；固定验证下单请求 decode 约低 1–3%，两个请求同时 decode 合计约 100 tok/s。
 
 速度统一用编码代理测速 `bench/agent_bench.py`（多步工具调用，5 个会话从 64K 到约 490K，覆盖 512K KV 池），见下文。
 
@@ -18,7 +19,7 @@ English: DeepSeek V4.1 Flash 1017 MXFP4 on one GPU, with 512K shared KV, two con
 requests, GPU-resident DSpark and the compiled lkqmoe 0.5.5 backend. The 2026-10-19 update keeps
 long prefills on the DeepGEMM FP4 indexer and takes the Engram row lookups off the decode critical path; the midday
 update uses a 22528-token prefill chunk, 50 hot-expert GPU slots per layer and lkqmoe's prefill pipeline; the evening
-update ships lkqmoe 0.5.5 (one-row CPU Down). The 2026-10-20 release verifies 1-6 DSpark tokens per request from this step's confidence (variable-length verify, the default; +14% with two requests decoding) and runs the GPU prefill experts on the SM120 FP4 tensor cores (lkqmoe 0.5.6, prefill +6-10%). Speeds come
+update ships lkqmoe 0.5.5 (one-row CPU Down). The 2026-10-20 release runs the GPU prefill experts on the SM120 FP4 tensor cores (lkqmoe 0.5.6, prefill +6-10%). Variable-length DSpark verify was tried and dropped on 2026-10-21: no gain with one request, +13.9% with two, but it changed output tokens in both cases; DSpark verifies a fixed 6 tokens. Speeds come
 from the coding-agent benchmark `bench/agent_bench.py` (multi-step tool use, five sessions from 64K to ~490K context).
 
 ## 组成
@@ -42,7 +43,7 @@ from the coding-agent benchmark `bench/agent_bench.py` (multi-step tool use, fiv
 | 内存 / GPU | 320 GB DDR5；RTX PRO 5000 72GB Blackwell（SM120） |
 | 模型存储 | 三星 990 PRO；Engram 位于低延迟 Optane NVMe |
 | 主模型专家 | 0 层整层常驻；40 层各使用 CPU + 50 个 LKQstrata GPU 热专家槽（分块 32768 时为 43），自适应替换（每 2 个窗口一轮，每窗口最多换入 32 个） |
-| DSpark | 3 层草稿常驻 GPU；块大小 5、每步验证 6 token（固定验证；变长验证有已知问题，暂停使用）|
+| DSpark | 3 层草稿常驻 GPU；块大小 5、每步验证 6 token（固定验证；变长验证 10-21 已放弃）|
 | KV / 并发 | 524288 token，共享池最多 2 请求 |
 | 预填充分块 / 显存比例 | 22528 / 0.95；prefill 软件流水，6 块跨层预取 |
 | Engram / CPU | 行缓存 4 GiB；112 线程、BF16 Down、动态调度 |
@@ -77,7 +78,7 @@ read_file / list_dir / grep / edit_file / write_file / check_python，工具结�
 | **全部** | | | 109 | 21,605 | **142.5** | 4.75 | 33.2 |
 
 - 命中前缀缓存的后续步骤，首字中位 **2.05 s**。
-- 本轮是 10-20 的生产配置（变长验证 + FP4 prefill）。变长验证后来发现单请求会改错 token（见开头的已知问题），固定验证下的数字待重测；变长验证对单请求和两个请求的作用见下文"10-20 优化内容"。
+- 本轮是 10-20 的生产配置（变长验证 + FP4 prefill）。变长验证 10-21 已放弃（见开头），固定验证下单请求 decode 约低 1–3%，两个请求同时 decode 合计约 100 tok/s。
 - 输出长度 p10 / p50 / p90 为 47 / 77 / 479 token；≥ 500 token 的长输出（写文件、改代码）占输出 token 的 52%。
 - 计算口径：
   - 冷 prefill tok/s = 未命中缓存的 prompt token ÷ 首字时间。每轮测速的系统提示带有本轮编号，不会命中以前的缓存；同一轮的会话之间只共享约 1–2K token 的系统提示和工具定义。
@@ -114,10 +115,10 @@ read_file / list_dir / grep / edit_file / write_file / check_python，工具结�
 
 | 项目 | 开关（启动脚本默认） | 说明 |
 |---|---|---|
-| DSpark 变长验证（**已撤回默认，有已知问题**） | `VERIFY_MODE=compact` | 单请求时会改错 token，见开头。每步按草稿置信度验证 1–6 个 token（思路来自 DeepSeek DeepInfer 的 `mtp_varlen`）。需要：Engram 哈希器支持变长行；验证图的填充 token 不进 CPU 专家（`LKQMOE_ACTIVE_FLAGS=1`）；逐点"验证 token 数 → 步耗时"表（`overlay/sps-table-compact.json`）；设备端用当前步置信度定长（`DS41_DSPARK_DEVICE_BUDGET=1`，原规划器用两步前的置信度，单请求反而 −2%）。`static` / `cap-sts` 仍可选。 |
+| DSpark 变长验证（**10-21 已放弃**） | 已从启动脚本移除 | 会改错 token，见开头。当时的做法：每步按草稿置信度验证 1–6 个 token（思路来自 DeepSeek DeepInfer 的 `mtp_varlen`）。需要：Engram 哈希器支持变长行；验证图的填充 token 不进 CPU 专家（`LKQMOE_ACTIVE_FLAGS=1`）；逐点"验证 token 数 → 步耗时"表（原 `overlay/sps-table-compact.json`，已删除）；设备端用当前步置信度定长（`DS41_DSPARK_DEVICE_BUDGET=1`，原规划器用两步前的置信度，单请求反而 −2%）。 |
 | GPU prefill 走 FP4 张量核 | `PREFILL_FP4=1`（`LKQMOE_PREFILL_FP4`） | lkqmoe 0.5.6：prefill 专家用 FlashInfer 0.6.18 CUTLASS fused MoE（MXFP4 权重 × MXFP8 激活，即官方参考的激活精度），不再解包成 BF16；热专家池里的专家走显卡内拷贝，暂存 12 槽，每次调用最多 4096 token。prefill 的 MoE 本来就受 PCIe 上传限制，所以收益来自更大的预取环和热池复用。 |
 
-变长验证（同日、同一组多领域提示，`results/varlen-verify-20261020.json`）：
+变长验证当时的测速（同日、同一组多领域提示，`results/varlen-verify-20261020.json`；已放弃，仅作记录）：
 
 | 场景 | static | 变长验证 |
 |---|---:|---:|
@@ -164,8 +165,8 @@ OpenAI消息入口支持 developer 角色：编码前按原顺序映射为模型
 
 目标专家保留紧凑的 MXFP4 权重和 UE8M0 block-32 scale，CPU 与 GPU 热专家池同时计算；
 长预填充按专家分块上传 GPU。共享专家、注意力和索引器在 GPU。
-默认 `VERIFY_MODE=static`（固定验证 6 个）。`VERIFY_MODE=compact`（变长验证）单请求时会改错 token，修好前不要用；它加载 `config/dspark-sts-calib.json` 和 `overlay/sps-table-compact.json`。生产启动不采集 STS 样本。
-`cap-sts` 仍可选，也加载同一校准文件；
+默认 `VERIFY_MODE=static`（固定验证 6 个）。变长验证（`compact`）10-21 已放弃并从启动脚本移除。生产启动不采集 STS 样本。
+`cap-sts` 仍可选，它加载 `config/dspark-sts-calib.json`；
 校准缺失或无效会拒绝启动。当前完整验证预算固定为 1.0，不宣称 STS 带来性能提升。
 
 ## 环境搭建
