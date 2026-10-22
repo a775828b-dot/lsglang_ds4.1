@@ -1,0 +1,35 @@
+[
+ {
+  "target": 522240,
+  "prompt_tokens": 522300,
+  "completion_tokens": 1024,
+  "ttft_s": 142.66,
+  "prefill_tok_s": 3661,
+  "decode_tok_s": 91.9,
+  "accept_length": 3.16,
+  "accept_source": "per_request",
+  "legacy_cumulative_accept_length": 3.146875,
+  "spec_tokens_details": {
+   "spec_accept_rate": 0.43333333333333335,
+   "spec_accept_length": 3.1604938271604937,
+   "spec_cap_length": 0.0,
+   "spec_block_accept_length": 0.0,
+   "spec_num_correct_drafts": 702,
+   "spec_num_proposed_drafts": 1620,
+   "spec_verify_ct": 324,
+   "spec_correct_drafts_histogram": [
+    65,
+    76,
+    58,
+    43,
+    29,
+    53
+   ],
+   "spec_cap_lens_histogram": []
+  },
+  "cached_tokens": null,
+  "recall": true,
+  "vram_peak_mib": 72830,
+  "error": null
+ }
+]

@@ -5,6 +5,8 @@
 本页参数和速度来自 2026-10-20 的部署：在 10-19 的配置（prefill 分块 22528、每层 50 个热专家槽、prefill 软件流水、lkqmoe CPU Down 一次读一行）上，lkqmoe 0.5.6 的 GPU prefill 改用 FP4 张量核（prefill +6–10%）。DSpark 试过变长验证，10-21 放弃（见下）。
 > **DSpark 变长验证：单请求没有收益，多请求有收益（+13%），但多请求有概率出错，所以不再继续迁移（2026-10-21）。**
 
+> **2026-10-22：内存补满 24 通道（384 GiB）、BIOS 改 NPS4，新增启动脚本 `launch/run-ds41-1017-24ch-nps4.sh`，两轮 agent_bench decode 157.5 / 144.0 tok/s，见「24 通道内存 + NPS4」一节。**
+
 速度统一用编码代理测速 `bench/agent_bench.py`（多步工具调用，5 个会话从 64K 到约 490K，覆盖 512K KV 池），见下文。
 
 框架基于 [guqiong96/Lsglang](https://github.com/guqiong96/Lsglang)；
@@ -17,6 +19,9 @@ long prefills on the DeepGEMM FP4 indexer and takes the Engram row lookups off t
 update uses a 22528-token prefill chunk, 50 hot-expert GPU slots per layer and lkqmoe's prefill pipeline; the evening
 update ships lkqmoe 0.5.5 (one-row CPU Down). The 2026-10-20 release runs the GPU prefill experts on the SM120 FP4 tensor cores (lkqmoe 0.5.6, prefill +6-10%). Variable-length DSpark verify was tried and dropped on 2026-10-21: no gain with one request, +13.9% with two, but it changed output tokens in both cases; DSpark verifies a fixed 6 tokens. Speeds come
 from the coding-agent benchmark `bench/agent_bench.py` (multi-step tool use, five sessions from 64K to ~490K context).
+2026-10-22: with all 24 memory channels (384 GiB) and BIOS NPS4, use `launch/run-ds41-1017-24ch-nps4.sh`; it takes the
+host-thread CPUs from lkqmoe's own worker list (the NPS2 list overlaps 8 worker CPUs under NPS4). agent_bench decode
+157.5 / 144.0 tok/s in two rounds, 522K + 1K full capacity without OOM.
 
 ## 组成
 
@@ -27,11 +32,70 @@ from the coding-agent benchmark `bench/agent_bench.py` (multi-step tool use, fiv
 | 1017 框架补丁 | `patches/lsglang-6068667-1017.patch`（14 个文件），含官方会话编码、block-32 激活量化、Engram 与 DSpark 调整，以及 10-19 的 decode 验证免同步和草稿词表头 FP8 |
 | 运行时覆盖 | `overlay/`（含 10-19 的 prefill 索引器分块）；Engram 行存储（10-19 起提前查表、并行读）、量化和按层提前加载在 `adapter/` |
 | lkqmoe | 0.5.6（10-20：GPU prefill 走 FP4 张量核 `LKQMOE_PREFILL_FP4`；动态库与 0.5.5 相同，AVX512 库用 `-DLKQMOE_DOWN_R4=1` 编译）；源码提交 `93edcc19eb06a71bccf8e8974d8c8c28decda344`；4 个动态库、Python 3.12 字节码、GPU 适配和热专家排名种子 |
-| 启动入口 | `launch/run-ds41-1017.sh` |
+| 启动入口 | `launch/run-ds41-1017.sh`（20 通道 / NPS2）；`launch/run-ds41-1017-24ch-nps4.sh`（24 通道 / NPS4，10-22） |
 | 依赖 | `requirements-lock.txt`；附本次使用的 FlashInfer 0.6.18 和 b12x 1.3.0 轮子 |
 | 实测与完整性 | `results/`、`SHA256SUMS` |
 
+## 24 通道内存 + NPS4（2026-10-22）
+
+内存补满到每路 12 通道（24 × 16 GiB DDR5-4800，共 384 GiB），BIOS 改为 NPS4（8 个 NUMA 节点）。
+框架补丁、lkqmoe 动态库和默认参数都没变，只换了启动脚本：
+
+- 启动：`launch/run-ds41-1017-24ch-nps4.sh`，用法和环境变量与 `launch/run-ds41-1017.sh` 相同。
+- 区别在 CPU 分配。lkqmoe 在 NPS4 下每个节点放 14 个专家线程（8 个物理核 + 6 个超线程），原脚本写死的 NPS2 列表
+  `76-79,92-94,108-111,124-127` 会和其中 8 个重叠。新脚本调用 lkqmoe 库自己的 `lkqmoe_worker_cpus`
+  （`launch/resolve_main_cpus.py`），主线程和加载预读用"允许的 CPU − 专家线程 − 调度线程 CPU 95"，本机得到 15 个逻辑 CPU，
+  与专家线程零重叠；结果为空、越界或重叠时拒绝启动。`MAIN_CPUS=列表` 可以手动指定，同样会被核对。
+- 参数：分块 22528、每层 50 个热专家槽、6 块 prefill 预取、Engram 行缓存 4 GiB、112 线程、Down 领取粒度 24、固定验证、
+  512K 共享 KV、最多 2 请求。
+
+| 项目 | 20 通道（下文 10-20 测速） | 24 通道（本节） |
+|---|---|---|
+| 内存 | 20 × 16 GB DDR5-4800，320 GB | 24 × 16 GiB DDR5-4800，384 GiB |
+| NUMA | NPS2，4 个节点 | NPS4，8 个节点 |
+| 纯读带宽实测 | 533 GB/s | 592 GB/s |
+| CPU 专家的有效权重带宽 | 约 415 GB/s | 约 481 GB/s |
+
+### agent_bench，两轮（同一次启动，口径同下文）
+
+| 会话 | 第 1 轮 冷 prefill 首字 s / tok/s | 请求 | 输出 token | decode tok/s | 接受长度 | 每步 ms | 第 2 轮 冷 prefill 首字 s / tok/s | 请求 | 输出 token | decode tok/s | 接受长度 | 每步 ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 64k | 19.6 / 3,377 | 17 | 4,943 | 146.5 | 4.65 | 31.6 | 15.0 / 4,431 | 21 | 7,123 | 141.7 | 4.46 | 31.4 |
+| 128k-write | 31.6 / 4,187 | 14 | 4,967 | 150.9 | 4.75 | 31.4 | 30.2 / 4,379 | 16 | 4,127 | 150.1 | 4.68 | 31.1 |
+| 256k | 64.2 / 4,122 | 24 | 1,316 | 195.2 | 5.33 | 26.8 | 62.6 / 4,229 | 10 | 2,502 | 124.0 | 3.99 | 32.0 |
+| 384k | 99.2 / 3,973 | 15 | 811 | 207.7 | 5.55 | 26.2 | 98.2 / 4,013 | 14 | 3,399 | 157.4 | 5.12 | 32.4 |
+| 500k | 126.9 / 3,856 | 11 | 592 | 211.2 | 5.53 | 25.7 | 126.9 / 3,856 | 5 | 271 | 196.6 | 5.53 | 27.6 |
+| **全部** | | 81 | 12,629 | **157.5** | 4.84 | 30.5 | | 66 | 17,422 | **144.0** | 4.56 | 31.6 |
+
+- 两轮合计 30,051 个输出 token，decode 149.4 tok/s；命中前缀缓存的后续步骤首字中位 3.01 / 2.36 s。
+- 两轮的输出量和接受长度差别较大（每轮内容由模型自己决定），所以给出两轮原始结果，不取单轮当结论。
+- 和下文 10-20 的 142.5 tok/s、每步 33.2 ms 相比，同时变了内存通道数、NPS、验证模式（当时是变长验证）和分词，不是控制变量对照。
+  控制变量的对照是同一组 20 个多领域提示 × 温度 0 / 0.7、单请求、固定验证、同一个 lkqmoe：每步 31.46 / 31.53 ms（20 通道 NPS2）→
+  29.86 / 30.12 ms（24 通道 NPS4），decode 99.8 / 98.2 → 105.9 / 104.3 tok/s。
+
+[第 1 轮数据](results/agent-bench-20261022-24ch-nps4-r1.json) · [第 2 轮数据](results/agent-bench-20261022-24ch-nps4-r2.json)
+
+**满容量验证（不是测速）**：522,300 输入 + 1,024 输出完成且正确召回，prefill 3,661 tok/s、首字 142.7 s；
+显存峰值 72,830 MiB（共 73,415），余量 0.57 GiB，无 OOM（[数据](results/capacity-522k-20261022-24ch-nps4.json)）。
+
+### 24 通道下测过、没有采用的调整
+
+同一台机器上用隔离服务做的交替 A/B（每组 80 个请求，按提示配对比较每步耗时，分辨率约 ±0.4%）：
+
+| 调整 | 结果 | 结论 |
+|---|---|---|
+| Down 领取粒度 24 → 48 行 | 每步 +0.02%（95% 区间 −0.29% ～ +0.45%），CPU 专家调用 +1.9% | 保持 24 |
+| 主线程只用 GPU 所在插槽的 7 个 CPU | 每步 +0.22%（区间 +0.06% ～ +0.39%） | 保持自动解析的 15 个 |
+| 分块 16384 + 每层 54 槽 | 冷 prefill 慢 11% ～ 15%（500K 首字 130 → 149 s），decode 单次每步约 −1.2% | 不采用 |
+| 分块 12288 + 每层 57 槽 | 冷 prefill 有 3 个长度低于 3,000 tok/s | 不采用 |
+| Engram 行缓存 4 → 16 GiB | 长上下文命中 95.3% → 96.1%，prefill 略慢，decode 不变 | 保持 4 GiB |
+| 64 线程（只用物理核） | NPS4 离线探针慢 3.9%（20 通道时在线慢 2.8%） | 保持 112 |
+
+decode 每步约 30 ms，GPU 剖析中约 6 ms 是 GPU 在等 CPU 专家；CPU 专家读权重已经接近内存带宽，剩下的提速主要靠更多带宽。
+
 ## 本机硬件与参数
+
+下表与下面的 agent_bench 结果是 10-20 的 20 通道 / NPS2 配置；24 通道 / NPS4 见上一节。
 
 | 项目 | 实测配置 |
 |---|---|

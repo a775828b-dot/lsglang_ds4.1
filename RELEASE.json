@@ -1,5 +1,5 @@
 {
- "date": "2026-10-21",
+ "date": "2026-10-22",
  "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
  "model_revision": "1bae0e1088993b9b82de08f59de5be5a34e42170",
  "lsglang_commit": "6068667581bebd2184f7e4acb46136f44837889a",
@@ -233,5 +233,56 @@
    ],
    "status": "dropped; removed from the launcher"
   }
- ]
+ ],
+ "nps4_24ch": {
+  "date": "2026-10-22",
+  "launch": "launch/run-ds41-1017-24ch-nps4.sh",
+  "cpu_resolver": "launch/resolve_main_cpus.py",
+  "memory": "24 x 16 GiB DDR5-4800 (384 GiB), 12 channels per socket",
+  "numa": "NPS4, 8 nodes",
+  "lkqmoe_threads": 112,
+  "threads_per_node": 14,
+  "dispatcher_cpu": 95,
+  "host_cpus": 15,
+  "host_worker_overlap": 0,
+  "defaults_unchanged": true,
+  "agent_bench": [
+   {
+    "round": 1,
+    "file": "results/agent-bench-20261022-24ch-nps4-r1.json",
+    "requests": 81,
+    "output_tokens": 12629,
+    "decode_tps": 157.5,
+    "median_request_tps": 200.3,
+    "accept": 4.841,
+    "ms_per_step": 30.53
+   },
+   {
+    "round": 2,
+    "file": "results/agent-bench-20261022-24ch-nps4-r2.json",
+    "requests": 66,
+    "output_tokens": 17422,
+    "decode_tps": 144.0,
+    "median_request_tps": 182.8,
+    "accept": 4.562,
+    "ms_per_step": 31.55
+   }
+  ],
+  "full_capacity_522k": {
+   "file": "results/capacity-522k-20261022-24ch-nps4.json",
+   "prompt_tokens": 522300,
+   "prefill_tps": 3661,
+   "ttft_s": 142.66,
+   "vram_peak_mib": 72830,
+   "recall": true
+  },
+  "not_adopted": [
+   "lkqmoe_down_grain 48",
+   "host threads on the GPU socket only",
+   "batch 16384 + 54 slots",
+   "batch 12288 + 57 slots",
+   "engram cache 16 GiB",
+   "64 lkqmoe threads"
+  ]
+ }
 }
