@@ -122,7 +122,7 @@ def install(module):
                             except Exception:
                                 ready = False
                             if ready:
-                                need = num_embeddings * 8
+                                need = self.rows * 8   # the scales of this rank's rows only
                                 available = next(int(line.split()[1]) * 1024 for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemAvailable:'))
                                 cg = next(line.split(':', 2)[2] for line in Path('/proc/self/cgroup').read_text().splitlines() if line.startswith('0::'))
                                 cgroup = Path('/sys/fs/cgroup') / cg.lstrip('/')
@@ -137,14 +137,17 @@ def install(module):
                     _lib.row_store_stats(self._store, values)
                     timing = (U * 3)()
                     _lib.row_store_timing(self._store, timing)
-                    record = dict(layer=layer_id, pid=os.getpid(), mode=os.getenv('OFFLOAD_MODE'),
+                    record = dict(layer=layer_id, rank=rank, pid=os.getpid(), mode=os.getenv('OFFLOAD_MODE'),
                                   hits=values[0], misses=values[1], reads=values[2], cache_bytes=values[3], timestamp=time.time(), io_batches=io_values[0],
                                   peak_batch_pages=io_values[1], scale_ram_bytes=io_values[2], scale_error=scale_error,
                                   lookups=timing[1], lookup_ns_total=timing[0], lookup_max_ns=timing[2],
                                   prefetch=_PREFETCH)
-                    temporary = destination / f'layer-{layer_id}.tmp'
+                    # One file per TP rank (rank 0 keeps the single-GPU name): ranks sharing a name
+                    # race on the rename and the loser's thread dies.
+                    name = f'layer-{layer_id}' + (f'-rank{rank}' if rank else '')
+                    temporary = destination / f'{name}.tmp'
                     temporary.write_text(json.dumps(record))
-                    temporary.replace(destination / f'layer-{layer_id}.json')
+                    temporary.replace(destination / f'{name}.json')
                     time.sleep(5)
             threading.Thread(target=report_stats, daemon=True).start()
         self._staging = {}

@@ -24,8 +24,9 @@ struct Store {
   int fd;
   aio_context_t aio = 0;
   uint8_t *pages = nullptr;
-  uint8_t *scale_storage = nullptr, *scale_data = nullptr;
+  uint8_t *scale_storage = nullptr, *scale_data = nullptr;   // scale_data[0] = row scale_row_lo
   size_t scale_allocation = 0;
+  uint64_t scale_row_lo = 0, scale_row_hi = 0;
   std::atomic<uint64_t> scale_bytes{0};
   std::mutex batch_lock;
   std::atomic<uint64_t> batches{0}, peak_pages{0};
@@ -354,7 +355,7 @@ static void row_store_lookup_batched(void *opaque) {
       const Miss &m = misses[k];
       uint8_t row[264];
       copy_pages(s, m.weight_page, s->weight_offset + m.id * 256, row, 256);
-      if (s->scale_data) std::memcpy(row + 256, s->scale_data + m.id * 8, 8);
+      if (s->scale_data) std::memcpy(row + 256, s->scale_data + (m.id - s->scale_row_lo) * 8, 8);
       else copy_pages(s, m.scale_page, s->scale_offset + m.id * 8, row + 256, 8);
       std::memcpy(work->weights + m.index * 256, row, 256);
       std::memcpy(work->scales + m.index * 8, row + 256, 8);
@@ -393,12 +394,14 @@ static void row_store_lookup_batched(void *opaque) {
 }
 
 
-// Explicit post-load operation: publish only after the entire exact scale table is read.
+// Explicit post-load operation: publish only after the exact scales of the owned rows
+// [row_lo, row_hi) are read (the whole table on one GPU; a TP rank never looks up other rows).
 extern "C" int row_store_preload_scales(Store *s) {
   std::lock_guard<std::mutex> guard(s->batch_lock);
   if (s->scale_data || s->resident) return 0;
-  const uint64_t base = s->scale_offset & ~uint64_t(4095);
-  const size_t delta = s->scale_offset - base, total = delta + s->rows * 8;
+  const uint64_t first = s->scale_offset + s->row_lo * 8;
+  const uint64_t base = first & ~uint64_t(4095);
+  const size_t delta = first - base, total = delta + (s->row_hi - s->row_lo) * 8;
   const size_t allocation = (total + 4095) & ~size_t(4095);
   auto *data = static_cast<uint8_t *>(mmap(nullptr, allocation,
       PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
@@ -415,7 +418,8 @@ extern "C" int row_store_preload_scales(Store *s) {
     done += requested;
   }
   s->scale_storage = data; s->scale_allocation = allocation;
-  s->scale_data = data + delta; s->scale_bytes.store(s->rows * 8);
+  s->scale_row_lo = s->row_lo; s->scale_row_hi = s->row_hi;
+  s->scale_data = data + delta; s->scale_bytes.store((s->row_hi - s->row_lo) * 8);
   return 0;
 }
 
@@ -430,6 +434,8 @@ extern "C" void row_store_stats(Store *s, uint64_t *out) {
 }
 extern "C" void row_store_range(Store *s, uint64_t lo, uint64_t hi) {
   if (lo > hi || hi > s->rows) fail("invalid row ownership range");
+  if (s->scale_data && (lo < s->scale_row_lo || hi > s->scale_row_hi))
+    fail("row ownership range outside the preloaded scales");
   s->row_lo = lo; s->row_hi = hi;
 }
 extern "C" void row_store_close(Store *s) {

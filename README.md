@@ -16,6 +16,8 @@ and NPS2 use `launch/run-ds41-1017.sh` (142.5 tok/s on 2026-10-20). What changed
 
 ## 版本更新
 
+- **2026-10-22（晚）**：Engram NVMe 后端为多卡做了两处修正：统计文件按 rank 分开写、scale 常驻只读本 rank 的行段；单卡行为不变。
+  在单卡机器上模拟 TP=2 / 4，查表结果与权重文件一致。详见 [reports/2026-10-22-engram-multi-gpu.md](reports/2026-10-22-engram-multi-gpu.md)。
 - **2026-10-22**：内存补满 24 通道（384 GiB）、BIOS 改 NPS4。新增启动脚本 `launch/run-ds41-1017-24ch-nps4.sh`，
   主线程 CPU 从 lkqmoe 的专家线程列表自动解析（原脚本的 NPS2 列表在 NPS4 下会与 8 个专家线程重叠）；默认参数不变，
   agent_bench decode 157.5 / 144.0 tok/s。详见 [reports/2026-10-22-24ch-nps4.md](reports/2026-10-22-24ch-nps4.md)（含测过但没有采用的调整）。
