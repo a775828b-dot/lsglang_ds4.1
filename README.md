@@ -1,3 +1,5 @@
+# 版本不再更新，请移步最新 XTier 仓库：[https://github.com/a775828b-dot/xtier](https://github.com/a775828b-dot/xtier)
+
 # DeepSeek V4.1 Flash 1017 · Lsglang + lkqmoe
 
 官方 **DeepSeek-V4.1-Flash-1017（MXFP4）** 单卡推理框架：RTX PRO 5000 72GB、双路 EPYC，
